@@ -23,7 +23,7 @@ sources.
 - **Multi-output builds**: `make html`, `make docx`, `make epub` alongside the default PDF.
 - **Workflow tooling**: `make stats`, `make submit` (zips PDF + cleaned source), `make arxiv` (tarball with PDF + intermediate .tex + bib + diagram PDFs for arXiv submission), `make diff REF=…` (latexdiff-driven tracked changes against any git ref), `make review` (line-numbered PDF for supervisor / referee feedback), `make watch` (entr rebuild), `make typecheck` (LuaLS), `make gc-diagrams` (prune orphan diagram cache entries).
 - **Pre-submission proofreading**: `make proofread` runs every static gate (typecheck, citation hygiene, spell-check, all `check-*` fixtures) in one shot; `make check-links` HEADs every URL in body + bib; and a [Claude Code skill](.claude/skills/paper-proofreading/SKILL.md) (`/paper-proofreading`) drives a full 7-phase prose pass — citations, cross-refs, TODO/FIXME residue, prose, structure, optional diff vs a base ref.
-- **CI**: GitHub Actions workflow builds the PDF on Linux and macOS on every push and attaches it to releases. A scheduled job opens a PR when the upstream Harvard CSL changes.
+- **CI**: GitHub Actions workflow builds the PDF on Linux on PRs and on Linux + macOS on push to `main` and on releases. Cachix substitutes pre-built nix derivations so a warm run lands in ~2 min instead of ~5. A scheduled job opens a PR when the upstream Harvard CSL changes (gated on commits since the last successful run, so dormant repos don't burn cron slots).
 - **Pre-commit hooks**: typecheck filters, validate citations on push, fix trailing whitespace and line endings.
 - **Lua filter type-checking** via `lua-language-server` against upstream EmmyLua stubs.
 

@@ -15,7 +15,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # PRs only get the Linux leg — typical iteration runs fast. Push
+        # to main, releases, and manual dispatches still exercise macOS
+        # to catch Darwin-specific regressions (font lookups, fork(2)
+        # differences in plantuml-cli, …) before tags get cut.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -26,7 +30,6 @@ jobs:
       # The cachix installer's `_nixbld*` user creation fails on hosted
       # macOS runners that already ship those users (eDSRecordAlreadyExists);
       # the DS installer handles the pre-existing-user case gracefully.
-      # Pairs natively with magic-nix-cache-action below.
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v17
         with:
@@ -34,40 +37,38 @@ jobs:
             experimental-features = nix-command flakes
             accept-flake-config = true
 
-      - name: Cache Nix store
-        uses: DeterminateSystems/magic-nix-cache-action@main
+      # Cachix replaces magic-nix-cache (which is throttled by GitHub's
+      # own cache backend — `429 Too Many Requests` is the standard
+      # response now). Pulls pre-built derivations from the named cache
+      # so the dev shell instantiates in ~20s instead of ~2m37s.
+      #
+      # Setup needed once per repo:
+      #   1. Sign in at https://app.cachix.org
+      #   2. Create a cache named `acedemic-template` (or change the
+      #      name: field below to match what you registered)
+      #   3. Generate a Write token from the cache's Settings page
+      #   4. Add it as repo secret CACHIX_AUTH_TOKEN
+      #
+      # Without the secret set, this action falls back to read-only
+      # mode: it still subscribes the cache as a substituter (so
+      # public derivations can be pulled), but won't push new ones.
+      - name: Set up Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: acedemic-template
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      - name: Type-check filters
-        run: nix develop --command make typecheck
-
-      - name: Check citations (cited-vs-defined + per-entry-type fields)
-        run: nix develop --command make check-refs
-
-      - name: Spell-check (project dictionary at .aspell.en.pws)
-        run: nix develop --command make spellcheck
+      # One step instead of seven: `make proofread` runs typecheck →
+      # check-refs → spellcheck → check-inverse → check-diagram-failure
+      # → check-wordcount-strict → check-csv-strict → check-anonymous
+      # in cheap-to-expensive order, failing fast. Coalescing the steps
+      # saves the ~3-5s/step `nix develop` re-instantiation cost.
+      - name: Proofreading gate (typecheck + bib + spell + all check-*)
+        run: nix develop --command make proofread
 
       - name: Check links (HEAD every URL in body + bib)
         run: nix develop --command make check-links
         continue-on-error: true   # network-dependent; warn but don't fail
-
-      # Behavioural-shape regression gates: each target builds a fixture
-      # and asserts on the output (filter side effects, stderr warnings,
-      # exit codes). These complement `nix flake check`, which only
-      # proves the fixtures don't crash.
-      - name: Check inverse-mode filter branches
-        run: nix develop --command make check-inverse
-
-      - name: Check diagram failure paths
-        run: nix develop --command make check-diagram-failure
-
-      - name: Check wordcount strict-mode error path
-        run: nix develop --command make check-wordcount-strict
-
-      - name: Check csv strict-mode error path
-        run: nix develop --command make check-csv-strict
-
-      - name: Check anonymous-mode filter isolation
-        run: nix develop --command make check-anonymous
 
       # Build via the flake-defined package, not `nix develop --command
       # make`. This is the same code path downstream consumers exercise
@@ -79,9 +80,13 @@ jobs:
       - name: Flake checks (mkReport fixtures)
         run: nix flake check --print-build-logs
 
+      # html / docx outputs are only attached to releases and pushes to
+      # main — PRs don't need them. Skipping on PR runs saves ~15s and
+      # avoids spurious continue-on-error noise.
       - name: Build secondary formats
+        if: github.ref == 'refs/heads/main' || github.event_name == 'release'
         run: nix develop --command make html docx
-        continue-on-error: true   # secondary formats; don't fail the run
+        continue-on-error: true
 
       - name: Print stats
         run: nix develop --command make stats
@@ -102,7 +107,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload other formats
-        if: matrix.os == 'ubuntu-latest' && always()
+        if: matrix.os == 'ubuntu-latest' && always() && (github.ref == 'refs/heads/main' || github.event_name == 'release')
         uses: actions/upload-artifact@v4
         with:
           name: report-other-formats

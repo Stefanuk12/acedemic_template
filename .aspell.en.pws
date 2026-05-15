@@ -1,4 +1,4 @@
-personal_ws-1.1 en 208
+personal_ws-1.1 en 212
 acedemic
 aspell
 backend
@@ -207,3 +207,7 @@ WebApp
 LaTeX
 crossref's
 LaTeX's
+Cachix
+CACHIX
+substituter
+substituters

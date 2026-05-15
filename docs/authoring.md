@@ -185,6 +185,30 @@ To remove a word: open `.aspell.en.pws` directly, delete the line,
 and decrement the trailing counter on line 1 (or just bump it down
 by the number of deletions).
 
+### Setting up the Cachix binary cache (one-time)
+
+[`.github/workflows/build.yml`](../.github/workflows/build.yml) is
+wired to push pre-built Nix derivations to a Cachix cache so that
+subsequent runs pull the texlive/pandoc/diagram-backend store paths
+instead of rebuilding them. A warm run lands in ~2 min vs ~5 min cold.
+
+If you fork or rename the repo, do this once:
+
+1. Sign in at <https://app.cachix.org>.
+2. Create a cache. Name it `acedemic-template` to match the workflow,
+   or pick your own and edit the `name:` field on the `Set up Cachix`
+   step in `build.yml`.
+3. From the cache's Settings page, generate a **Write** token.
+4. Add it as repo secret `CACHIX_AUTH_TOKEN`
+   (Settings → Secrets and variables → Actions → New repository secret).
+
+Without the token, the workflow falls back to read-only mode: it
+still subscribes the cache as a substituter (so derivations someone
+else pushed can be pulled) but won't push new ones — which means the
+cache stops accumulating useful entries. Don't ship the template
+without setting this up unless you genuinely want every CI run to
+rebuild texlive from source.
+
 ### Running CI locally
 
 Before pushing a branch that might break CI, run the GitHub Actions
