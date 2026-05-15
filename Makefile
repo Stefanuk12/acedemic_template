@@ -80,7 +80,7 @@ PANDOC_OPTS := \
   -M lstPrefix="Lst." \
   -M secPrefix="§"
 
-.PHONY: all build-dir clean watch open typecheck html docx epub review stats submit arxiv diff check-refs check-links check-inverse check-diagram-failure check-wordcount-strict check-csv-strict check-anonymous spellcheck spellcheck-add proofread gc-diagrams
+.PHONY: all build-dir clean watch open typecheck html docx epub review stats submit arxiv diff check-refs check-links check-inverse check-diagram-failure check-wordcount-strict check-csv-strict check-anonymous spellcheck spellcheck-add proofread ci-local gc-diagrams
 
 all: $(OUT)
 
@@ -725,6 +725,33 @@ spellcheck-add:
 	    exit 1; \
 	  fi
 	@$(MAKE) --no-print-directory spellcheck
+
+# ---- Run CI locally with act ----
+# Spins up the GitHub Actions runtime in Docker via `act` and runs the
+# `pdf` job from .github/workflows/build.yml against the current tree.
+#
+# Reads platform pins and cache directories from .actrc (committed
+# alongside this Makefile). The first invocation pulls the
+# catthehacker/ubuntu:act-latest image (~17 GB) and installs Nix into
+# the container — expect ~25-40 minutes end-to-end. Subsequent runs
+# reuse the container image and the action cache.
+#
+# Limitations baked into .actrc:
+#   - macOS jobs skipped (act is Linux-only — they run on hosted CI)
+#   - magic-nix-cache-action degrades to no-op (no real GH cache backend)
+#   - upload-artifact steps land in build/.act-artifacts (gitignored)
+#
+# Pass extra act flags via ACT_ARGS, e.g.:
+#   make ci-local ACT_ARGS="-j pdf --verbose"
+#   make ci-local ACT_ARGS="-W .github/workflows/bump-csl.yml"
+ACT_ARGS ?=
+ci-local:
+	@command -v docker >/dev/null || { echo "docker not found"; exit 1; }
+	@docker info >/dev/null 2>&1 || { echo "docker daemon not reachable"; exit 1; }
+	@command -v act >/dev/null || { echo "act not found (in dev shell?)"; exit 1; }
+	@mkdir -p $(OUT_DIR)/.act-action-cache $(OUT_DIR)/.act-artifacts
+	@echo "==> running act against .github/workflows/ (first run pulls ~17 GB)"
+	@act $(ACT_ARGS)
 
 # ---- Proofreading gate ----
 # Runs every static check the proofreading skill needs as Phase 1, in

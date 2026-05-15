@@ -185,6 +185,43 @@ To remove a word: open `.aspell.en.pws` directly, delete the line,
 and decrement the trailing counter on line 1 (or just bump it down
 by the number of deletions).
 
+### Running CI locally
+
+Before pushing a branch that might break CI, run the GitHub Actions
+workflow in Docker via [act](https://github.com/nektos/act):
+
+```sh
+nix develop --command make ci-local
+```
+
+That invokes `act` with the settings in `.actrc` (committed alongside
+this Makefile): platform pinned to `catthehacker/ubuntu:act-latest`,
+macOS matrix leg skipped, action cache + upload artifacts redirected
+under `build/`. The first run pulls the runner image (~17 GB) and
+installs Nix into the container — expect 25-40 minutes end-to-end.
+Subsequent runs reuse the cache.
+
+Pass extra flags via `ACT_ARGS`:
+
+```sh
+make ci-local ACT_ARGS="-j pdf --verbose"             # one job, verbose
+make ci-local ACT_ARGS="-W .github/workflows/bump-csl.yml"  # different workflow
+make ci-local ACT_ARGS="--list"                       # enumerate jobs and exit
+```
+
+Limitations:
+
+| Limitation                         | Reason                                                             |
+|------------------------------------|--------------------------------------------------------------------|
+| macOS matrix leg is skipped        | `act` is Linux-only; macOS only runs on hosted GitHub Actions      |
+| `magic-nix-cache-action` no-ops    | Local runs have no GitHub cache backend; the action degrades gracefully |
+| Artifact uploads land in `build/`  | `act` writes to a local server instead of GitHub's artifact storage|
+
+A green `ci-local` run on the `pdf` job is a strong predictor of a
+green run on hosted CI — but it isn't proof; release-attached
+artefacts, scheduled jobs, and macOS-specific failures only surface
+upstream.
+
 ### Building variants
 
 | Target                 | What it produces                                                                              |

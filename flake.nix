@@ -207,6 +207,7 @@
             pre-commit           # `pre-commit run --all-files`
             lua-language-server  # `make typecheck`
             poppler-utils        # `pdfinfo` etc. for debugging
+            act                  # `make ci-local` — run GH Actions locally
           ]);
 
           # Exported so the Makefile picks them up via its `?=`
