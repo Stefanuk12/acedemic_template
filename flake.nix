@@ -184,6 +184,64 @@
             # time (CSL is pre-fetched as a flake-level fixed-output).
           };
 
+        # Wrap a `make` target from this template's Makefile as a Nix
+        # derivation, so every proofread check becomes a Cachix-cacheable
+        # flake check instead of a dev-shell command. The unpacked source
+        # tree gives the target the same layout it sees inside `nix
+        # develop` (filters/, src/, refs/, tests/fixtures/, .luarc.json),
+        # plus the two symlinks shellHook would create.
+        mkMakeCheck =
+          {
+            target,
+            extraInputs ? [ ],
+          }:
+          pkgs.stdenv.mkDerivation {
+            pname = target;
+            version = "0.0.0";
+            src = pkgs.lib.cleanSource ./.;
+            nativeBuildInputs = buildDeps ++ extraInputs;
+
+            EISVOGEL_DIR = "${eisvogel}";
+            PANDOC_LUA_TYPES_DIR = "${pandoc-lua-types}";
+
+            # Sandbox defaults to LANG unset → POSIX/C; that turns
+            # multibyte source bytes (e.g. ² in `E=mc²`) into garbled
+            # input for aspell and breaks spellcheck on legal prose.
+            LANG = "C.UTF-8";
+            LC_ALL = "C.UTF-8";
+
+            buildPhase = ''
+              runHook preBuild
+              export HOME=$TMPDIR
+              export FONTCONFIG_PATH=${pkgs.fontconfig.out}/etc/fonts
+
+              # Mirror shellHook: ensure the two symlinks the in-tree
+              # defaults rely on (templates/eisvogel for TEMPLATES_DIR,
+              # ./types for .luarc.json's workspace.library) point at
+              # this flake's pinned inputs, regardless of whatever the
+              # source snapshot happened to ship.
+              rm -rf templates/eisvogel types
+              mkdir -p templates
+              ln -sfn ${eisvogel} templates/eisvogel
+              ln -sfn ${pandoc-lua-types} types
+
+              # Patched CSL alongside the in-tree copy. -n preserves
+              # whatever the source ships (same patched file); kept for
+              # consistency with mkReport's own setup.
+              mkdir -p refs
+              cp -n ${harvardCsl} refs/harvard.csl 2>/dev/null || true
+
+              make ${target}
+              runHook postBuild
+            '';
+
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out
+              runHook postInstall
+            '';
+          };
+
         # Single source of truth for VS Code / VSCodium extension
         # recommendations: parsed from .vscode/extensions.json so the
         # editor's native "recommended extensions" prompt and our
@@ -309,6 +367,23 @@
             src = ./tests/fixtures/anonymous;
             name = "mkReport-anonymous";
           };
+
+          # Proofread gate, every sub-target lifted out of `make
+          # proofread` and run as its own derivation. CI calls these
+          # straight from `nix flake check` / `nix build .#checks.*`;
+          # results land in Cachix so re-runs on unchanged inputs are
+          # free instead of re-running aspell/pandoc/luals from scratch.
+          typecheck = mkMakeCheck {
+            target = "typecheck";
+            extraInputs = [ pkgs.lua-language-server ];
+          };
+          check-refs = mkMakeCheck { target = "check-refs"; };
+          spellcheck = mkMakeCheck { target = "spellcheck"; };
+          check-inverse = mkMakeCheck { target = "check-inverse"; };
+          check-diagram-failure = mkMakeCheck { target = "check-diagram-failure"; };
+          check-wordcount-strict = mkMakeCheck { target = "check-wordcount-strict"; };
+          check-csv-strict = mkMakeCheck { target = "check-csv-strict"; };
+          check-anonymous = mkMakeCheck { target = "check-anonymous"; };
         };
 
         # `nix run` against a consumer repo's working dir builds the

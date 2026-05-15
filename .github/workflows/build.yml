@@ -34,17 +34,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Filter-level + content-level checks (typecheck, bib hygiene,
-  # spell-check, all the fixture-shape gates). Single-arch — none of
-  # these checks are platform-dependent and they share derivations
-  # with the build job's Cachix pull. Runs in parallel with `build`.
-  proofread:
-    name: Proofreading gate
+  # Single job: every proofread check is now a flake check derivation
+  # (see flake.nix `mkMakeCheck`), so the PDF build and every gate run
+  # in parallel inside one `nix build` invocation — no second VM, no
+  # duplicate Nix install / Cachix setup. Cachix caches each derivation
+  # individually, so warm-cache re-runs only rebuild what changed.
+  build:
+    name: Build & check
     runs-on: ubuntu-latest
     steps:
       - name: Check out
         uses: actions/checkout@v4
 
+      # Determinate Systems' installer instead of cachix/install-nix-action.
+      # The cachix installer's `_nixbld*` user creation fails on hosted
+      # macOS runners that already ship those users (eDSRecordAlreadyExists);
+      # the DS installer handles the pre-existing-user case gracefully.
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v17
         with:
@@ -73,71 +78,36 @@ jobs:
           name: acedemic-template
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      # One step instead of seven: `make proofread` runs typecheck →
-      # check-refs → spellcheck → check-inverse → check-diagram-failure
-      # → check-wordcount-strict → check-csv-strict → check-anonymous
-      # in cheap-to-expensive order, failing fast.
-      - name: Proofreading gate (typecheck + bib + spell + all check-*)
-        run: nix develop --command make proofread
-
-  # PDF build via the public mkReport package + all mkReport-* fixture
-  # builds in a single parallel nix invocation. Independent of the
-  # proofread job — both jobs race; either failing fails the workflow.
-  #
-  # Linux-only. The flake builds the same Nix expressions on darwin,
-  # but Nix's per-arch pinning already guarantees that — there are no
-  # CI-only darwin gotchas in this codebase (no BSD vs GNU sed, no
-  # platform-specific Lua, no host-fontconfig dependency). macOS
-  # consumers will exercise the darwin code path on their own first
-  # `nix build`; pre-emptively running it on every commit was paying
-  # ~6m of wall-clock for no observed regressions.
-  build:
-    name: Build PDF (ubuntu-latest)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # full history so `make diff REF=...` works
-
-      # Determinate Systems' installer instead of cachix/install-nix-action.
-      # The cachix installer's `_nixbld*` user creation fails on hosted
-      # macOS runners that already ship those users (eDSRecordAlreadyExists);
-      # the DS installer handles the pre-existing-user case gracefully.
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v17
-        with:
-          extra-conf: |
-            experimental-features = nix-command flakes
-            accept-flake-config = true
-
-      - name: Set up Cachix
-        uses: cachix/cachix-action@v15
-        with:
-          name: acedemic-template
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-
-      # Build the package + every flake-check derivation in one nix
+      # Build the package + every flake check in a single nix
       # invocation so they run in parallel (shared deps cache-hit
       # within a single eval). The first flake-ref produces the
       # canonical `./result` for artefact upload; subsequent ones land
       # at result-1, result-2, … and are cleaned up before the upload
       # step picks them up.
-      - name: Build package + mkReport fixtures (parallel)
+      - name: Build package + run every flake check (parallel)
         run: |
           sys=$(nix eval --raw --impure --expr 'builtins.currentSystem')
           nix build --print-build-logs \
             ".#packages.$sys.default" \
             ".#checks.$sys.mkReport-minimal" \
             ".#checks.$sys.mkReport-inverse" \
-            ".#checks.$sys.mkReport-anonymous"
+            ".#checks.$sys.mkReport-anonymous" \
+            ".#checks.$sys.typecheck" \
+            ".#checks.$sys.check-refs" \
+            ".#checks.$sys.spellcheck" \
+            ".#checks.$sys.check-inverse" \
+            ".#checks.$sys.check-diagram-failure" \
+            ".#checks.$sys.check-wordcount-strict" \
+            ".#checks.$sys.check-csv-strict" \
+            ".#checks.$sys.check-anonymous"
           # ./result → packages.default (first arg). Drop the rest so
-          # the artefact-stage step doesn't pick up fixture PDFs.
-          rm -f result-1 result-2 result-3
+          # the artefact-stage step doesn't pick up fixture / check
+          # outputs.
+          for r in result-*; do [ -e "$r" ] && rm -f "$r"; done
 
       # Metadata-level checks the parallel build above doesn't cover
-      # (lib output evaluates, devShells instantiate, apps run). All
-      # check derivations are already realised, so this is near-instant.
+      # (lib output evaluates, devShells instantiate, apps run). Every
+      # check derivation is already realised so this is near-instant.
       - name: Flake metadata checks
         run: nix flake check --print-build-logs
 
@@ -154,18 +124,16 @@ jobs:
           if-no-files-found: error
 
   # Release-only: build the secondary formats (html / docx) and attach
-  # every artefact to the GitHub Release. Needs both proofread + build
-  # to have passed so a release can never ship a known-broken PDF.
+  # every artefact to the GitHub Release. Needs `build` to have passed
+  # so a release can never ship a known-broken PDF.
   release-artefacts:
     name: Release artefacts (html + docx + attach to release)
-    needs: [proofread, build]
+    needs: [build]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
       - name: Check out
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v17
