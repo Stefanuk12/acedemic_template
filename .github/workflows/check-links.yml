@@ -1,0 +1,42 @@
+name: Check links
+
+# URL liveness check for body markdown + refs.bib. Lifted out of the
+# main Build workflow because (a) it's network-dependent and therefore
+# flaky, and (b) link rot is a function of upstream sites going dark,
+# not of commits to this repo — so weekly granularity is sufficient.
+#
+# Fires Monday at 12:00 UTC, plus on-demand via workflow_dispatch. A
+# failure files no issue automatically; check the run summary on the
+# Actions tab. Wire in `peter-evans/create-issue-from-file@v5` if you
+# want failures to auto-open an issue.
+
+on:
+  schedule:
+    - cron: '0 12 * * 1'   # 12:00 UTC every Monday
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v17
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Set up Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: acedemic-template
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: HEAD every URL in body + bib (incl. DOIs via doi.org)
+        run: nix develop --command make check-links

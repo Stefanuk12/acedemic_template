@@ -1,35 +1,50 @@
 name: Build
 
+# paths-ignore: doc-only changes (prose in README.md, docs/**, root
+# LICENSE, in-repo issue/PR templates under .github/**.md) don't change
+# what the build produces, so skip CI entirely on those commits. NOT
+# in the ignore list: src/**.md (paper source), tests/**.md (fixtures),
+# filters/*.lua, Makefile, flake.{nix,lock}, .github/workflows/*.yml
+# (workflow self-validation), .luarc.json, .pre-commit-config.yaml,
+# .aspell.en.pws. If a PR's ONLY changes are in the ignored set, no
+# job runs.
 on:
   push:
     branches: [main, master]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - '.github/**.md'
   pull_request:
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - '.github/**.md'
   release:
     types: [published]
   workflow_dispatch:
 
+# Cancel in-progress runs for the same PR when new commits arrive; let
+# push-to-main / release / dispatch runs all finish so every shipped
+# commit has its own complete artefact record.
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  pdf:
-    name: Build PDF (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # PRs only get the Linux leg — typical iteration runs fast. Push
-        # to main, releases, and manual dispatches still exercise macOS
-        # to catch Darwin-specific regressions (font lookups, fork(2)
-        # differences in plantuml-cli, …) before tags get cut.
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
+  # Filter-level + content-level checks (typecheck, bib hygiene,
+  # spell-check, all the fixture-shape gates). Single-arch — none of
+  # these checks are platform-dependent and they share derivations
+  # with the build job's Cachix pull. Runs in parallel with `build`.
+  proofread:
+    name: Proofreading gate
+    runs-on: ubuntu-latest
     steps:
       - name: Check out
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # full history so `make diff REF=...` works
 
-      # Determinate Systems' installer instead of cachix/install-nix-action.
-      # The cachix installer's `_nixbld*` user creation fails on hosted
-      # macOS runners that already ship those users (eDSRecordAlreadyExists);
-      # the DS installer handles the pre-existing-user case gracefully.
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v17
         with:
@@ -37,10 +52,10 @@ jobs:
             experimental-features = nix-command flakes
             accept-flake-config = true
 
-      # Cachix replaces magic-nix-cache (which is throttled by GitHub's
-      # own cache backend — `429 Too Many Requests` is the standard
-      # response now). Pulls pre-built derivations from the named cache
-      # so the dev shell instantiates in ~20s instead of ~2m37s.
+      # Cachix replaces magic-nix-cache (throttled by GitHub's own cache
+      # backend — `429 Too Many Requests` is the standard response now).
+      # Pulls pre-built derivations from the named cache so the dev
+      # shell instantiates in ~20s instead of ~2m37s.
       #
       # Setup needed once per repo:
       #   1. Sign in at https://app.cachix.org
@@ -61,42 +76,79 @@ jobs:
       # One step instead of seven: `make proofread` runs typecheck →
       # check-refs → spellcheck → check-inverse → check-diagram-failure
       # → check-wordcount-strict → check-csv-strict → check-anonymous
-      # in cheap-to-expensive order, failing fast. Coalescing the steps
-      # saves the ~3-5s/step `nix develop` re-instantiation cost.
+      # in cheap-to-expensive order, failing fast.
       - name: Proofreading gate (typecheck + bib + spell + all check-*)
         run: nix develop --command make proofread
 
-      - name: Check links (HEAD every URL in body + bib)
-        run: nix develop --command make check-links
-        continue-on-error: true   # network-dependent; warn but don't fail
+  # PDF build via the public mkReport package + all mkReport-* fixture
+  # builds in a single parallel nix invocation. Independent of the
+  # proofread job — both jobs race; either failing fails the workflow.
+  build:
+    name: Build PDF (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # PRs only get the Linux leg — typical iteration runs fast.
+        # Push to main, releases, and manual dispatches exercise macOS
+        # to catch Darwin-specific regressions (font lookups, fork(2)
+        # differences in plantuml-cli, …) before tags get cut.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so `make diff REF=...` works
 
-      # Build via the flake-defined package, not `nix develop --command
-      # make`. This is the same code path downstream consumers exercise
-      # via `acedemic.lib.${system}.mkReport`, so CI failures here catch
-      # real regressions in the public API.
-      - name: Build (nix build)
-        run: nix build --print-build-logs
+      # Determinate Systems' installer instead of cachix/install-nix-action.
+      # The cachix installer's `_nixbld*` user creation fails on hosted
+      # macOS runners that already ship those users (eDSRecordAlreadyExists);
+      # the DS installer handles the pre-existing-user case gracefully.
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v17
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
 
-      - name: Flake checks (mkReport fixtures)
+      - name: Set up Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: acedemic-template
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      # Build the package + every flake-check derivation in one nix
+      # invocation so they run in parallel (shared deps cache-hit
+      # within a single eval). The first flake-ref produces the
+      # canonical `./result` for artefact upload; subsequent ones land
+      # at result-1, result-2, … and are cleaned up before the upload
+      # step picks them up.
+      - name: Build package + mkReport fixtures (parallel)
+        run: |
+          sys=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+          nix build --print-build-logs \
+            ".#packages.$sys.default" \
+            ".#checks.$sys.mkReport-minimal" \
+            ".#checks.$sys.mkReport-inverse" \
+            ".#checks.$sys.mkReport-anonymous"
+          # ./result → packages.default (first arg). Drop the rest so
+          # the artefact-stage step doesn't pick up fixture PDFs.
+          rm -f result-1 result-2 result-3
+
+      # Metadata-level checks the parallel build above doesn't cover
+      # (lib output evaluates, devShells instantiate, apps run). All
+      # check derivations are already realised, so this is near-instant.
+      - name: Flake metadata checks
         run: nix flake check --print-build-logs
-
-      # html / docx outputs are only attached to releases and pushes to
-      # main — PRs don't need them. Skipping on PR runs saves ~15s and
-      # avoids spurious continue-on-error noise.
-      - name: Build secondary formats
-        if: github.ref == 'refs/heads/main' || github.event_name == 'release'
-        run: nix develop --command make html docx
-        continue-on-error: true
 
       - name: Print stats
         run: nix develop --command make stats
         continue-on-error: true
 
-      - name: Stage artefacts
+      - name: Stage PDF
         run: |
           mkdir -p artefacts
           cp result/*.pdf artefacts/ 2>/dev/null || true
-          cp build/report.html build/report.docx artefacts/ 2>/dev/null || true
 
       - name: Upload PDF
         if: matrix.os == 'ubuntu-latest'
@@ -106,8 +158,50 @@ jobs:
           path: artefacts/*.pdf
           if-no-files-found: error
 
-      - name: Upload other formats
-        if: matrix.os == 'ubuntu-latest' && always() && (github.ref == 'refs/heads/main' || github.event_name == 'release')
+  # Release-only: build the secondary formats (html / docx) and attach
+  # every artefact to the GitHub Release. Needs both proofread + build
+  # to have passed so a release can never ship a known-broken PDF.
+  release-artefacts:
+    name: Release artefacts (html + docx + attach to release)
+    needs: [proofread, build]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v17
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Set up Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: acedemic-template
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Build secondary formats
+        run: nix develop --command make html docx
+        continue-on-error: true   # pandoc-crossref undefined-xref noise in non-LaTeX outputs
+
+      - name: Download PDF from `build` job
+        uses: actions/download-artifact@v4
+        with:
+          name: report-pdf
+          path: artefacts
+
+      - name: Stage html + docx alongside PDF
+        run: |
+          cp build/report.html build/report.docx artefacts/ 2>/dev/null || true
+          ls -la artefacts/
+
+      - name: Upload html + docx
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: report-other-formats
@@ -116,8 +210,7 @@ jobs:
             artefacts/report.docx
           if-no-files-found: ignore
 
-      - name: Attach to release
-        if: matrix.os == 'ubuntu-latest' && github.event_name == 'release'
+      - name: Attach all formats to release
         uses: softprops/action-gh-release@v2
         with:
           files: |
