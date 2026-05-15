@@ -107,6 +107,22 @@ end
 ---
 ---The LaTeX uses \fbox (built-in) + \textcolor (xcolor, already
 ---loaded by eisvogel) so no extra packages are needed.
+---Escape LaTeX-special characters in `s` so it survives `\textbf{}`.
+---The hint comes from authors (filenames, block identifiers); any of
+---`# $ % & _ { } ~ ^ \` would otherwise break xelatex in restricted
+---horizontal mode. Backslash is handled first so subsequent escapes
+---are not re-escaped; `~` and `^` use command form because the bare
+---backslash escapes would be parsed as accent operators.
+---@param s string
+---@return string
+local function latex_escape(s)
+	s = s:gsub("\\", "\\textbackslash{}")
+	s = s:gsub("([#%$%%&_{}])", "\\%1")
+	s = s:gsub("~", "\\textasciitilde{}")
+	s = s:gsub("%^", "\\textasciicircum{}")
+	return s
+end
+
 ---@param heading string            label shown before " FAILED" in the placeholder ("DIAGRAM", "CSV")
 ---@param hint string               render hint shown after the em-dash (hash, file path, block id)
 ---@param fail_hard_env string|nil  env var that escalates to a hard error when set to "1"
@@ -121,8 +137,8 @@ function M.make_failure_placeholder(heading, hint, fail_hard_env, error_tag)
 		error("[" .. prefix .. "] render failed for " .. hint
 			.. " (" .. fail_hard_env .. "=1)", 0)
 	end
-	local msg = string.format("%s FAILED — %s", heading,
-		hint ~= "" and hint or "<unnamed block>")
+	local raw_hint = hint ~= "" and hint or "<unnamed block>"
+	local msg = string.format("%s FAILED — %s", heading, latex_escape(raw_hint))
 	local latex = string.format(
 		"\\begin{center}\\fbox{\\textcolor{red}{\\textbf{%s}}}\\end{center}",
 		msg)
