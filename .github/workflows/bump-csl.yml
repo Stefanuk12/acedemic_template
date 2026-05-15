@@ -13,19 +13,66 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: read   # gate-activity reads the prior run via `gh run list`
 
 jobs:
+  # Skip the heavy bump job when the cron fires against a dormant
+  # repo (no commits since the last successful run). workflow_dispatch
+  # bypasses the gate so a maintainer can always force a check.
+  #
+  # The check is cheap — one `gh run list` call against the Actions
+  # API — and runs whether the trigger is schedule or workflow_dispatch
+  # so the manual path also gets the diagnostic output.
+  gate-activity:
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.check.outputs.should-run }}
+    steps:
+      - name: Check for commits since the last successful run
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "::notice::workflow_dispatch — bypassing dormancy gate."
+            echo "should-run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          last_sha=$(gh run list \
+            --workflow=bump-csl.yml \
+            --status=success \
+            --limit=1 \
+            --json headSha \
+            --jq '.[0].headSha // ""' \
+            --repo "$GITHUB_REPOSITORY")
+
+          if [ -z "$last_sha" ]; then
+            echo "::notice::No prior successful run — proceeding (first-time setup)."
+            echo "should-run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$GITHUB_SHA" = "$last_sha" ]; then
+            echo "::notice::HEAD ($GITHUB_SHA) unchanged since last successful run — skipping."
+            echo "should-run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Commits since $last_sha → $GITHUB_SHA — proceeding."
+            echo "should-run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   bump:
+    needs: gate-activity
+    if: needs.gate-activity.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out
         uses: actions/checkout@v4
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v27
+        uses: DeterminateSystems/nix-installer-action@v17
         with:
-          nix_path: nixpkgs=channel:nixos-unstable
-          extra_nix_config: |
+          extra-conf: |
             experimental-features = nix-command flakes
 
       - name: Compute current upstream SRI hash
