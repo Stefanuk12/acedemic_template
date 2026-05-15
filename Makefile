@@ -728,7 +728,8 @@ spellcheck-add:
 
 # ---- Run CI locally with act ----
 # Spins up the GitHub Actions runtime in Docker via `act` and runs the
-# `pdf` job from .github/workflows/build.yml against the current tree.
+# build workflow (.github/workflows/build.yml) against the current
+# tree. CI is Linux-only now, so no matrix gymnastics needed.
 #
 # Reads platform pins and cache directories from .actrc (committed
 # alongside this Makefile). The first invocation pulls the
@@ -737,13 +738,13 @@ spellcheck-add:
 # reuse the container image and the action cache.
 #
 # Limitations baked into .actrc:
-#   - macOS jobs skipped (act is Linux-only — they run on hosted CI)
-#   - magic-nix-cache-action degrades to no-op (no real GH cache backend)
+#   - cachix-action runs without a token unless you export CACHIX_AUTH_TOKEN
+#     in your environment (it'll be read-only otherwise)
 #   - upload-artifact steps land in build/.act-artifacts (gitignored)
 #
 # Pass extra act flags via ACT_ARGS, e.g.:
-#   make ci-local ACT_ARGS="-j pdf --verbose"
-#   make ci-local ACT_ARGS="-W .github/workflows/bump-csl.yml"
+#   make ci-local ACT_ARGS="-j build --verbose"
+#   make ci-local ACT_ARGS="-W .github/workflows/check-links.yml"
 ACT_ARGS ?=
 ci-local:
 	@command -v docker >/dev/null || { echo "docker not found"; exit 1; }

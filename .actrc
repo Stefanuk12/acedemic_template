@@ -8,16 +8,7 @@
 #     The community-standard image for act. Includes node, sudo,
 #     systemd-ish tooling, and the bits needed by
 #     `cachix/install-nix-action`. ~17 GB on disk after first pull.
-#   macos-latest → -self-hosted
-#     act can't run macOS jobs; -self-hosted is the official "skip"
-#     marker. The CI matrix's macOS leg is exercised against real
-#     hardware via GitHub Actions only.
 -P ubuntu-latest=catthehacker/ubuntu:act-latest
--P macos-latest=-self-hosted
-
-# Restrict the matrix to Linux only — macos-latest fails fast on
-# `-self-hosted` anyway, but this keeps the act output uncluttered.
---matrix os:ubuntu-latest
 
 # Reuse a host-side action cache so re-runs don't re-fetch action
 # tarballs each invocation. Lives under build/ so it's gitignored.

@@ -83,17 +83,17 @@ jobs:
   # PDF build via the public mkReport package + all mkReport-* fixture
   # builds in a single parallel nix invocation. Independent of the
   # proofread job — both jobs race; either failing fails the workflow.
+  #
+  # Linux-only. The flake builds the same Nix expressions on darwin,
+  # but Nix's per-arch pinning already guarantees that — there are no
+  # CI-only darwin gotchas in this codebase (no BSD vs GNU sed, no
+  # platform-specific Lua, no host-fontconfig dependency). macOS
+  # consumers will exercise the darwin code path on their own first
+  # `nix build`; pre-emptively running it on every commit was paying
+  # ~6m of wall-clock for no observed regressions.
   build:
-    name: Build PDF (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # PRs only get the Linux leg — typical iteration runs fast.
-        # Push to main, releases, and manual dispatches exercise macOS
-        # to catch Darwin-specific regressions (font lookups, fork(2)
-        # differences in plantuml-cli, …) before tags get cut.
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
+    name: Build PDF (ubuntu-latest)
+    runs-on: ubuntu-latest
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -141,17 +141,12 @@ jobs:
       - name: Flake metadata checks
         run: nix flake check --print-build-logs
 
-      - name: Print stats
-        run: nix develop --command make stats
-        continue-on-error: true
-
       - name: Stage PDF
         run: |
           mkdir -p artefacts
           cp result/*.pdf artefacts/ 2>/dev/null || true
 
       - name: Upload PDF
-        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: report-pdf
