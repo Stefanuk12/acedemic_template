@@ -1,0 +1,29 @@
+# Build artefacts
+build/
+*.aux
+*.log
+*.out
+*.toc
+
+# Editor / OS noise
+.direnv/
+.envrc.local
+*.swp
+.DS_Store
+
+# Nix
+result
+result-*
+
+# Dev-shell symlinks into the nix store (created by flake.nix shellHook)
+templates/eisvogel
+types
+
+# Claude Code workspace. Ship our own project-level skills (so
+# consumers inherit them); ignore everything else, including the
+# upstream-managed desloppify skill (installed via
+# `desloppify update-skill claude` — pin the tool, not the file).
+.claude/*
+!.claude/skills/
+.claude/skills/desloppify/
+.desloppify

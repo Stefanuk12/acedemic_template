@@ -1,0 +1,42 @@
+# Run locally with:
+#   nix develop --command pre-commit run --all-files
+# Install to run on every git commit:
+#   nix develop --command pre-commit install
+#
+# Lua filter type-checking and YAML well-formedness are the two
+# checks most likely to catch real problems before they hit a build.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # the YAML inside src/00-metadata.md is parsed by pandoc, not as
+        # a standalone YAML document, so we don't ask check-yaml to look
+        # at .md files.
+      - id: check-added-large-files
+        args: ['--maxkb=1024']
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  # Static type-check Lua filters using the project's own toolchain.
+  - repo: local
+    hooks:
+      - id: typecheck-filters
+        name: type-check Lua filters
+        entry: nix develop --command make typecheck
+        language: system
+        files: '^(filters/.*\.lua|types/.*\.lua|\.luarc\.json)$'
+        pass_filenames: false
+
+      # Fast pre-push gate. A full PDF build runs in CI; locally we
+      # just confirm the bibliography is consistent. typecheck-filters
+      # above already covers Lua changes.
+      - id: check-refs
+        name: bibliography sanity (cited keys ↔ refs.bib)
+        entry: nix develop --command make check-refs
+        language: system
+        files: '^(src/.*\.md|refs/.*\.bib)$'
+        pass_filenames: false
+        stages: [pre-push]

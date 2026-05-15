@@ -1,0 +1,16 @@
+{
+    "recommendations": [
+        "yzhang.markdown-all-in-one",
+        "bierner.markdown-mermaid",
+        "bpruitt-goddard.mermaid-markdown-syntax-highlighting",
+        "jebbs.plantuml",
+        "james-yu.latex-workshop",
+        "mkhl.direnv",
+        "jnoortheen.nix-ide",
+        "streetsidesoftware.code-spell-checker",
+        "sumneko.lua"
+    ],
+    "unwantedRecommendations": [
+        "johnnymorganz.luau-lsp"
+    ]
+}

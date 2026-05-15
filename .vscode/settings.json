@@ -1,0 +1,21 @@
+{
+    "cSpell.enabledFileTypes": {
+        "*": false
+    },
+
+    // jebbs.plantuml — use the local plantuml CLI (provided by the flake)
+    // so live preview matches the build pipeline exactly.
+    "plantuml.render": "Local",
+    "plantuml.commandArgs": ["-nbthread", "auto"],
+    "plantuml.diagramsRoot": "build/diagrams",
+    "plantuml.exportOutDir": "build/diagrams",
+    "plantuml.exportFormat": "svg",
+
+    // ---- LuaLS (sumneko.lua) ----
+    // Most config lives in .luarc.json so the lua-language-server CLI
+    // picks it up too. Workspace settings here just reinforce the
+    // version and keep the editor experience predictable.
+    "Lua.runtime.version": "Lua 5.4",
+    "Lua.workspace.library": ["types"],
+    "Lua.workspace.checkThirdParty": false,
+}

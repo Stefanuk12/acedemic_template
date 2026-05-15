@@ -1,0 +1,117 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  pdf:
+    name: Build PDF (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so `make diff REF=...` works
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Type-check filters
+        run: nix develop --command make typecheck
+
+      - name: Check citations (cited-vs-defined + per-entry-type fields)
+        run: nix develop --command make check-refs
+
+      - name: Spell-check (project dictionary at .aspell.en.pws)
+        run: nix develop --command make spellcheck
+
+      - name: Check links (HEAD every URL in body + bib)
+        run: nix develop --command make check-links
+        continue-on-error: true   # network-dependent; warn but don't fail
+
+      # Behavioural-shape regression gates: each target builds a fixture
+      # and asserts on the output (filter side effects, stderr warnings,
+      # exit codes). These complement `nix flake check`, which only
+      # proves the fixtures don't crash.
+      - name: Check inverse-mode filter branches
+        run: nix develop --command make check-inverse
+
+      - name: Check diagram failure paths
+        run: nix develop --command make check-diagram-failure
+
+      - name: Check wordcount strict-mode error path
+        run: nix develop --command make check-wordcount-strict
+
+      - name: Check csv strict-mode error path
+        run: nix develop --command make check-csv-strict
+
+      - name: Check anonymous-mode filter isolation
+        run: nix develop --command make check-anonymous
+
+      # Build via the flake-defined package, not `nix develop --command
+      # make`. This is the same code path downstream consumers exercise
+      # via `acedemic.lib.${system}.mkReport`, so CI failures here catch
+      # real regressions in the public API.
+      - name: Build (nix build)
+        run: nix build --print-build-logs
+
+      - name: Flake checks (mkReport fixtures)
+        run: nix flake check --print-build-logs
+
+      - name: Build secondary formats
+        run: nix develop --command make html docx
+        continue-on-error: true   # secondary formats; don't fail the run
+
+      - name: Print stats
+        run: nix develop --command make stats
+        continue-on-error: true
+
+      - name: Stage artefacts
+        run: |
+          mkdir -p artefacts
+          cp result/*.pdf artefacts/ 2>/dev/null || true
+          cp build/report.html build/report.docx artefacts/ 2>/dev/null || true
+
+      - name: Upload PDF
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-pdf
+          path: artefacts/*.pdf
+          if-no-files-found: error
+
+      - name: Upload other formats
+        if: matrix.os == 'ubuntu-latest' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-other-formats
+          path: |
+            artefacts/report.html
+            artefacts/report.docx
+          if-no-files-found: ignore
+
+      - name: Attach to release
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artefacts/*.pdf
+            artefacts/report.html
+            artefacts/report.docx
