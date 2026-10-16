@@ -73,6 +73,22 @@ function M.run(cmd)
 	return os.execute(cmd) == true
 end
 
+---Convert `svg` to ctx.pdf_path with rsvg-convert (vector, tight
+---bounding box). Shared final step of the SVG-producing backends
+---(mermaid, plantuml, d2). Logs `[tag] rsvg-convert failed …` and
+---returns nil on failure, matching render()'s contract.
+---@param ctx DiagramCtx
+---@param svg string
+---@return string?
+function M.svg_to_pdf(ctx, svg)
+	local cmd = string.format("rsvg-convert -f pdf -o %s %s", M.shell_quote(ctx.pdf_path), M.shell_quote(svg))
+	if not M.run(cmd) or not M.file_exists(ctx.pdf_path) then
+		io.stderr:write("[" .. ctx.tag .. "] rsvg-convert failed for diagram " .. ctx.hash .. "\n")
+		return nil
+	end
+	return ctx.pdf_path
+end
+
 ---@class DiagramSpec
 ---@field tag string                                          short name used in stderr (e.g. "d2")
 ---@field classes string[]                                    fence classes that trigger this filter
@@ -94,19 +110,6 @@ end
 ---@field block CodeBlock        the Pandoc CodeBlock being rendered
 ---@field hash_extra? string     value returned by spec.hash_extra (if any) — let render() reuse it without recomputing
 
----Build a visible failure-placeholder block as a red, boxed LaTeX
----notice. Used by the diagram backends and by filters/csv.lua so a
----failed render is obvious in the rendered PDF — silently leaving
----the source CodeBlock in place meant authors shipped documents
----with literal markup where a figure or table should have been.
----
----`fail_hard_env` is the env var name (e.g. "DIAGRAM_FAIL_HARD",
----"CSV_FAIL_HARD") that escalates to a Lua error() instead of a
----visible placeholder. The error is raised with level 0 so the user
----sees only the "[tag] …" message, not the Lua source prefix.
----
----The LaTeX uses \fbox (built-in) + \textcolor (xcolor, already
----loaded by eisvogel) so no extra packages are needed.
 ---Escape LaTeX-special characters in `s` so it survives `\textbf{}`.
 ---The hint comes from authors (filenames, block identifiers); any of
 ---`# $ % & _ { } ~ ^ \` would otherwise break xelatex in restricted
@@ -123,6 +126,19 @@ local function latex_escape(s)
 	return s
 end
 
+---Build a visible failure-placeholder block as a red, boxed LaTeX
+---notice. Used by the diagram backends and by filters/csv.lua so a
+---failed render is obvious in the rendered PDF — silently leaving
+---the source CodeBlock in place meant authors shipped documents
+---with literal markup where a figure or table should have been.
+---
+---`fail_hard_env` is the env var name (e.g. "DIAGRAM_FAIL_HARD",
+---"CSV_FAIL_HARD") that escalates to a Lua error() instead of a
+---visible placeholder. The error is raised with level 0 so the user
+---sees only the "[tag] …" message, not the Lua source prefix.
+---
+---The LaTeX uses \fbox (built-in) + \textcolor (xcolor, already
+---loaded by eisvogel) so no extra packages are needed.
 ---@param heading string            label shown before " FAILED" in the placeholder ("DIAGRAM", "CSV")
 ---@param hint string               render hint shown after the em-dash (hash, file path, block id)
 ---@param fail_hard_env string|nil  env var that escalates to a hard error when set to "1"

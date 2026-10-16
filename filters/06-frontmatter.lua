@@ -55,9 +55,8 @@ end
 ---@return Block[]
 local function frontmatter_section(title, body)
 	local blocks = {}
-	-- An unnumbered chapter-style heading. The {-} class tells pandoc to
-	-- skip section numbering. The .unnumbered class also keeps it out of
-	-- the auto-generated TOC if toc-depth excludes unnumbered headings.
+	-- An unnumbered chapter-style heading: the .unnumbered class (what
+	-- `{-}` expands to in Markdown) skips section numbering.
 	table.insert(blocks, pandoc.Header(1, { pandoc.Str(title) },
 		pandoc.Attr("", { "unnumbered" }, {})))
 	for _, b in ipairs(body) do

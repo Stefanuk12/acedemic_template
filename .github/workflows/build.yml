@@ -92,6 +92,8 @@ jobs:
             ".#checks.$sys.mkReport-minimal" \
             ".#checks.$sys.mkReport-inverse" \
             ".#checks.$sys.mkReport-anonymous" \
+            ".#checks.$sys.mkReport-book" \
+            ".#checks.$sys.mkReport-extra-filters" \
             ".#checks.$sys.typecheck" \
             ".#checks.$sys.check-refs" \
             ".#checks.$sys.spellcheck" \
@@ -99,7 +101,9 @@ jobs:
             ".#checks.$sys.check-diagram-failure" \
             ".#checks.$sys.check-wordcount-strict" \
             ".#checks.$sys.check-csv-strict" \
-            ".#checks.$sys.check-anonymous"
+            ".#checks.$sys.check-anonymous" \
+            ".#checks.$sys.check-section-limits" \
+            ".#checks.$sys.check-book"
           # ./result → packages.default (first arg). Drop the rest so
           # the artefact-stage step doesn't pick up fixture / check
           # outputs.

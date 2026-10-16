@@ -15,9 +15,9 @@
 --     title: "Glossary"       # section heading
 --     only-used: true         # only list acronyms that appeared in the text
 --
--- Matching is exact-string against Str inlines. Plurals ("APIs"),
--- possessives ("API's"), and acronyms inside Code/CodeBlock are
--- not expanded.
+-- Matching is exact-string against Str inlines, ignoring surrounding
+-- punctuation ("(API)," matches API). Plurals ("APIs"), possessives
+-- ("API's"), and acronyms inside Code/CodeBlock are not expanded.
 
 local script_dir = debug.getinfo(1, "S").source:sub(2):match("(.*/)") or "./"
 package.path = script_dir .. "?.lua;" .. package.path
@@ -43,8 +43,9 @@ function Pandoc(doc)
 	-- Walk and expand first-use
 	local processed = pandoc.walk_block(pandoc.Div(doc.blocks), {
 		Str = function(s)
-			-- Strip trailing punctuation for matching, preserve it on the way out.
-			local core, tail = s.text:match("^(%S-)(%p*)$")
+			-- Strip surrounding punctuation for matching, e.g. "(API)," —
+			-- preserve it on the way out.
+			local lead, core, tail = s.text:match("^(%p*)(.-)(%p*)$")
 			if not core or core == "" then return nil end
 
 			local expansion = acronyms[core]
@@ -53,7 +54,7 @@ function Pandoc(doc)
 			if seen[core] then return nil end
 			seen[core] = true
 
-			return pandoc.Str(expansion .. " (" .. core .. ")" .. (tail or ""))
+			return pandoc.Str(lead .. expansion .. " (" .. core .. ")" .. tail)
 		end,
 	})
 	doc.blocks = processed.content

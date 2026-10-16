@@ -30,6 +30,17 @@ bodycellhf,beta,gamma
 delta,epsilon,zeta
 ```
 
+The next block has rows of different lengths, with the widest row
+last and a trailing empty field. Every cell must survive: csv.lua sizes
+the table to the widest row, so the token in its third column reaches
+the LaTeX output exactly once.
+
+```{.csv #tbl:ragged header=false caption="Ragged inline CSV"}
+narrowrow
+wideone,widetwo,widethreetoken
+trailing,empty,
+```
+
 The empty fenced block below has zero rows after parsing, so csv.lua
 hits the placeholder branch via the `#rows == 0` check (a distinct
 path from the io.open failure above) and emits a second placeholder

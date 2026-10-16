@@ -1,8 +1,8 @@
 -- filters/_meta.lua
 --
--- Shared YAML-metadata coercion helpers for the metadata filters
--- (00-wordcount, 02-draft, 03-anonymous, 04-todos, 05-glossary,
--- 06-frontmatter, 07-authors). Loaded via the package.path shim
+-- Shared YAML-metadata coercion and word-counting helpers for the
+-- metadata filters (00-wordcount, 02-draft, 03-anonymous, 04-todos,
+-- 05-glossary, 06-frontmatter, 07-authors, 08-section-limits). Loaded via the package.path shim
 -- documented in those filters; the leading underscore keeps this
 -- file out of the default $(FILTERS) glob in Makefile so Pandoc
 -- does not try to invoke it as a filter directly.
@@ -63,6 +63,40 @@ function M.as_set(meta_list)
 		end
 	end
 	return set
+end
+
+---Count whitespace-separated words in `value`: a string, or any pandoc
+---element / list (Block, Blocks, Inlines, MetaInlines, MetaBlocks).
+---
+---Walks the inline leaves (Str, Code, Math) rather than stringifying
+---the whole value: pandoc.utils.stringify joins list items, table cells
+---and adjacent blocks with no separator, so "first / second" in a list
+---would count as the single word "firstsecond". Raw inlines are not
+---counted.
+---@param value any
+---@return integer
+function M.count_words(value)
+	local n = 0
+	---@param text string
+	local function add(text)
+		for _ in text:gmatch("%S+") do n = n + 1 end
+	end
+	if type(value) == "string" then
+		add(value)
+		return n
+	end
+	-- Pandoc elements are userdata, lists are tables; both have :walk.
+	local kind = type(value)
+	if (kind == "table" or kind == "userdata") and value.walk then
+		value:walk({
+			Str = function(s) add(s.text) end,
+			Code = function(c) add(c.text) end,
+			Math = function(m) add(m.text) end,
+		})
+		return n
+	end
+	add(M.as_string(value))
+	return n
 end
 
 ---Append `blocks_to_add` to a MetaBlocks-typed metadata field, creating

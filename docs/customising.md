@@ -12,7 +12,7 @@ Edit `src/00-metadata.md`. Useful Eisvogel knobs:
 | `titlepage-rule-color` | Hex color of the dividing rule                      |
 | `logo`                 | Path to a PDF/PNG logo (e.g. `assets/logo.pdf`)     |
 | `logo-width`           | e.g. `100mm`                                        |
-| `book: true`           | Switch to scrbook (chapters; drops abstract)        |
+| `book: true`           | Switch to scrbook: `#` headings become chapters (the Makefile passes `--top-level-division=chapter`); drops abstract |
 
 For more, see [Eisvogel's README](https://github.com/Wandmalfarbe/pandoc-latex-template).
 
@@ -50,6 +50,31 @@ The formatted count is also exposed as `word-count` for use in custom
 template snippets — e.g. `$word-count$ words` in a header-includes
 LaTeX command.
 
+## Per-section limits
+
+Forms such as a terms of reference often cap each section separately.
+`filters/08-section-limits.lua` reads those caps straight from the
+headings, so the source mirrors the form:
+
+```markdown
+# Background to Project (max 300 words)
+# Objectives (max 10 objectives, max 150 words)
+# Sources of information / bibliography (list of references, max 10)
+```
+
+`max N words` caps the section's words (counted like `wordcount`:
+block quotes, code and citations excluded, so form guidance can stay
+in the source as `>` quotes). Any other `max N` caps its items:
+top-level list items plus generated bibliography entries. A section
+runs until the next heading at the same or higher level. Headings
+without a `max N` are ignored.
+
+```yaml
+section-limits:
+  report: true    # print every limited section's counts on each build
+  strict: false   # fail the build when a section is over
+```
+
 ## Filter naming convention
 
 Files in `filters/` follow three patterns, each with a distinct role:
@@ -58,7 +83,7 @@ Files in `filters/` follow three patterns, each with a distinct role:
   Numeric prefix encodes load order via the `Makefile` glob; lower
   numbers run first. Used for metadata transforms (cover style, draft
   watermark, anonymity, todos, glossary, frontmatter, authors,
-  wordcount).
+  wordcount, section limits).
 - `<name>.lua` (no prefix) — **block-scope filters** (operate on
   `CodeBlock`/other AST nodes). Order between siblings does not matter
   because each only matches its own fence class. Used for the
@@ -94,6 +119,7 @@ shapes. Pick the shape that matches the filter's complexity:
   |----------------|------------------------------|
   | `wordcount.*`  | `filters/00-wordcount.lua`   |
   | `todos.*`      | `filters/04-todos.lua`       |
+  | `section-limits.*` | `filters/08-section-limits.lua` |
   | `glossary.*`   | `filters/05-glossary.lua`    |
   | `acronyms:`    | `filters/05-glossary.lua`    |
 

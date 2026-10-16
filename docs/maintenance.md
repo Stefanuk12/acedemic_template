@@ -55,8 +55,8 @@ workflow), then a stage-1 job builds release-only secondary artefacts:
    `spellcheck`, and every `check-*` fixture target in cheap-to-
    expensive order, failing fast.
 2. `build` — one `nix build` invocation realises
-   `packages.<system>.default` plus the three `mkReport-*` flake
-   checks in parallel, then a near-instant `nix flake check` for
+   `packages.<system>.default` plus every `mkReport-*` and `check-*`
+   flake check in parallel, then a near-instant `nix flake check` for
    lib / devShell / app metadata. Uploads the PDF as the `report-pdf`
    artefact.
 3. `release-artefacts` (release events only, gated on the two above

@@ -120,6 +120,7 @@
         mkReport =
           {
             src,
+            # Derivation pname and output file: result/<name>.pdf.
             name ? "report",
             # Subdirs inside `src` that hold the user's content.
             srcDir ? "src",
@@ -161,11 +162,12 @@
                 FILTERS_DIR=${self}/filters \
                 TEMPLATES_DIR=${eisvogel} \
                 OUT_DIR=$PWD/build \
+                OUT=$PWD/build/${name}.pdf \
                 ENGINE=${engine} \
                 ${pkgs.lib.optionalString (template != null) "TEMPLATE=${template}"} \
                 ${pkgs.lib.optionalString (extraFilters != [ ])
                   "EXTRA_FILTERS=${pkgs.lib.escapeShellArg
-                    (pkgs.lib.concatStringsSep " " (map toString extraFilters))}"} \
+                    (pkgs.lib.concatStringsSep " " (map (f: "${f}") extraFilters))}"} \
                 ${pkgs.lib.concatStringsSep " " extraGoals}
               runHook postBuild
             '';
@@ -182,6 +184,76 @@
 
             # Sandbox default off — we don't fetch anything at build
             # time (CSL is pre-fetched as a flake-level fixed-output).
+          };
+
+        # Tools `mkApp` scripts and the dev shell need beyond buildDeps.
+        interactiveDeps = with pkgs; [
+          entr        # `make watch`
+          git         # mkApp finds the repo root
+          coreutils
+          findutils
+        ];
+
+        # Run this template's Makefile against a source tree in the
+        # caller's working copy (not the store), so `watch`, `open` and
+        # incremental diagram caching work. Takes the same layout args
+        # as mkReport; paths are relative to the repo root (or $PWD when
+        # `fromRepoRoot = false`). Extra args after `--` are Make goals:
+        #
+        #   apps.paper = acedemic.lib.${system}.mkApp { name = "paper"; };
+        #   nix run .#paper              # build build/paper.pdf
+        #   nix run .#paper -- watch     # rebuild on save
+        #
+        # `goals` bakes Make goals in, e.g. a dedicated watch app:
+        #   apps.paper-watch = mkApp { name = "paper"; goals = [ "watch" ]; };
+        #
+        # Unlike mkReport, extraFilters should be strings relative to the
+        # root: Nix paths are copied to the store, so edits to them are
+        # only picked up on the next `nix run`, and `watch` won't see them.
+        mkApp =
+          {
+            name ? "report",
+            srcDir ? "src",
+            refsDir ? "refs",
+            outDir ? "build",
+            engine ? "xelatex",
+            extraFilters ? [ ],
+            template ? null,
+            goals ? [ ],
+            fromRepoRoot ? true,
+          }:
+          {
+            type = "app";
+            program = toString (
+              pkgs.writeShellScript "acedemic-${name}" ''
+                set -eu
+                export PATH=${pkgs.lib.makeBinPath (buildDeps ++ interactiveDeps)}:$PATH
+                export FONTCONFIG_PATH=${pkgs.fontconfig.out}/etc/fonts
+                ${pkgs.lib.optionalString fromRepoRoot ''
+                  cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+                ''}
+                # Patched CSL, unless the tree ships its own (saves the
+                # Makefile's curl fetch, so builds work offline).
+                if [ ! -e ${refsDir}/harvard.csl ]; then
+                  mkdir -p ${refsDir}
+                  cp ${harvardCsl} ${refsDir}/harvard.csl
+                  chmod u+w ${refsDir}/harvard.csl
+                fi
+                exec make -f ${self}/Makefile --no-print-directory \
+                  SRC_DIR=${srcDir} \
+                  REFS_DIR=${refsDir} \
+                  FILTERS_DIR=${self}/filters \
+                  TEMPLATES_DIR=${eisvogel} \
+                  OUT_DIR=${outDir} \
+                  OUT=${outDir}/${name}.pdf \
+                  ENGINE=${engine} \
+                  ${pkgs.lib.optionalString (template != null) "TEMPLATE=${template}"} \
+                  ${pkgs.lib.optionalString (extraFilters != [ ])
+                    "EXTRA_FILTERS=${pkgs.lib.escapeShellArg
+                      (pkgs.lib.concatStringsSep " " (map (f: "${f}") extraFilters))}"} \
+                  ${pkgs.lib.escapeShellArgs goals} "$@"
+              ''
+            );
           };
 
         # Wrap a `make` target from this template's Makefile as a Nix
@@ -251,16 +323,16 @@
       in
       {
         # Re-export so consumer flakes can build their own report:
-        #   acedemic.lib.${system}.mkReport { src = ./.; }
+        #   acedemic.lib.${system}.mkReport { src = ./.; }   # nix build
+        #   acedemic.lib.${system}.mkApp { }                 # nix run
         lib = {
-          inherit mkReport;
+          inherit mkReport mkApp;
         };
 
         devShells.default = pkgs.mkShell {
           name = "pandoc-report-template";
 
-          packages = buildDeps ++ (with pkgs; [
-            entr                 # `make watch`
+          packages = buildDeps ++ interactiveDeps ++ (with pkgs; [
             zip                  # `make submit`
             pre-commit           # `pre-commit run --all-files`
             lua-language-server  # `make typecheck`
@@ -283,7 +355,7 @@
             echo "   mmdc         : $(mmdc --version 2>/dev/null || echo present)"
             echo "   plantuml     : $(plantuml -version 2>/dev/null | head -1 | awk '{print $3}')"
             echo "   dot          : $(dot -V 2>&1 | awk '{print $5}')"
-            echo "   rsvg-convert : $(rsvg-convert --version | awk '{print $2}')"
+            echo "   rsvg-convert : $(rsvg-convert --version | head -1 | awk '{print $3}')"
             echo ""
             echo "   make         build  build/report.pdf"
             echo "   make watch          rebuild on save (entr)"
@@ -291,14 +363,18 @@
             echo "   make clean          remove build/"
             echo ""
 
-            # In-tree convenience: provide local symlinks for the two
-            # vendored assets so (a) the Makefile defaults Just Work
-            # without env wiring and (b) .luarc.json's
-            # `workspace.library = ["types"]` resolves for VS Code's
-            # LuaLS. Both paths are gitignored.
-            mkdir -p templates
-            [ -e templates/eisvogel ] || ln -sfn "$EISVOGEL_DIR" templates/eisvogel
-            [ -e types ]              || ln -sfn "$PANDOC_LUA_TYPES_DIR" types
+            # Convenience symlinks for the two vendored assets, so (a) the
+            # Makefile defaults work outside the shell and (b) LuaLS can
+            # resolve `workspace.library = ["types"]` (.luarc.json).
+            # Created under the repo root, not $PWD, so entering the shell
+            # from a subdirectory doesn't scatter them. Consumers can move
+            # them with ACEDEMIC_LINK_DIR (relative to the repo root), e.g.
+            # devShell.overrideAttrs { ACEDEMIC_LINK_DIR = "docs/tooling"; }
+            # Refreshed on every entry so a `nix flake update` takes effect.
+            link_dir="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/''${ACEDEMIC_LINK_DIR:-.}"
+            mkdir -p "$link_dir/templates"
+            ln -sfn "$EISVOGEL_DIR" "$link_dir/templates/eisvogel"
+            ln -sfn "$PANDOC_LUA_TYPES_DIR" "$link_dir/types"
 
             # --- Install recommended VS Code / VSCodium extensions ---
             # Opt-in: set ACEDEMIC_INSTALL_EXTENSIONS=1 in your env (or
@@ -339,7 +415,6 @@
         # against their own source tree instead.
         packages.default = mkReport {
           src = ./.;
-          name = "pandoc-report-template";
         };
 
         # Flake checks. Run with `nix flake check`. The minimal fixture
@@ -367,6 +442,20 @@
             src = ./tests/fixtures/anonymous;
             name = "mkReport-anonymous";
           };
+          # Nix-path extraFilters must be copied into the store, not
+          # stringified to a path the build sandbox can't see.
+          mkReport-book = mkReport {
+            src = ./tests/fixtures/book;
+            name = "mkReport-book";
+          };
+          mkReport-extra-filters = mkReport {
+            src = ./tests/fixtures/minimal;
+            name = "mkReport-extra-filters";
+            extraFilters = [
+              ./tests/fixtures/extra-filters
+              ./tests/fixtures/extra-filters/marker.lua
+            ];
+          };
 
           # Proofread gate, every sub-target lifted out of `make
           # proofread` and run as its own derivation. CI calls these
@@ -384,26 +473,15 @@
           check-wordcount-strict = mkMakeCheck { target = "check-wordcount-strict"; };
           check-csv-strict = mkMakeCheck { target = "check-csv-strict"; };
           check-anonymous = mkMakeCheck { target = "check-anonymous"; };
+          check-section-limits = mkMakeCheck { target = "check-section-limits"; };
+          check-book = mkMakeCheck { target = "check-book"; };
         };
 
         # `nix run` against a consumer repo's working dir builds the
         # PDF in-place under ./build, no flake.nix required on their
         # end. Useful for CI on a paper repo that doesn't have its own
         # flake yet.
-        apps.default = {
-          type = "app";
-          program = toString (pkgs.writeShellScript "build-report" ''
-            export PATH=${pkgs.lib.makeBinPath buildDeps}:$PATH
-            export FONTCONFIG_PATH=${pkgs.fontconfig.out}/etc/fonts
-            exec ${pkgs.gnumake}/bin/make -f ${self}/Makefile \
-              FILTERS_DIR=${self}/filters \
-              TEMPLATES_DIR=${eisvogel} \
-              SRC_DIR="$PWD/src" \
-              REFS_DIR="$PWD/refs" \
-              OUT_DIR="$PWD/build" \
-              "$@"
-          '');
-        };
+        apps.default = mkApp { fromRepoRoot = false; };
       }
     );
 }

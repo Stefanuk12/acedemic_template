@@ -18,10 +18,10 @@ sources.
 - **Harvard "Cite Them Right" citations** via citeproc, with the CSL fetched at build time and patched to approximate the 13th edition.
 - **Figure cross-references** via `pandoc-crossref`, with a hyperlinked List of Figures.
 - **Lettered appendix** (`A`, `A.1`, `A.2`, …) via raw LaTeX.
-- **Word count** with configurable inclusion rules and an optional word-limit cap that can warn or fail the build.
+- **Word count** with configurable inclusion rules and an optional word-limit cap that can warn or fail the build, plus **per-section limits** read from headings like `# Aim (max 100 words)`.
 - **Author tooling**: draft watermark, `[text]{.todo}` markers, acronym auto-expansion with auto-glossary, and a blind-review anonymous mode.
 - **Multi-output builds**: `make html`, `make docx`, `make epub` alongside the default PDF.
-- **Workflow tooling**: `make stats`, `make submit` (zips PDF + cleaned source), `make arxiv` (tarball with PDF + intermediate .tex + bib + diagram PDFs for arXiv submission), `make diff REF=…` (latexdiff-driven tracked changes against any git ref), `make review` (line-numbered PDF for supervisor / referee feedback), `make watch` (entr rebuild), `make typecheck` (LuaLS), `make gc-diagrams` (prune orphan diagram cache entries).
+- **Workflow tooling**: `make stats`, `make submit` (zips PDF + cleaned source), `make arxiv` (tarball with PDF + intermediate .tex + bib + diagram PDFs for arXiv submission), `make diff REF=…` (latexdiff-driven tracked changes against any git ref), `make review` (line-numbered PDF for supervisor / referee feedback), `make watch` (entr rebuild; picks up new files), `make typecheck` (LuaLS), `make gc-diagrams` (prune orphan diagram cache entries).
 - **Pre-submission proofreading**: `make proofread` runs every static gate (typecheck, citation hygiene, spell-check, all `check-*` fixtures) in one shot; `make check-links` HEADs every URL in body + bib; and a [Claude Code skill](.claude/skills/paper-proofreading/SKILL.md) (`/paper-proofreading`) drives a full 7-phase prose pass — citations, cross-refs, TODO/FIXME residue, prose, structure, optional diff vs a base ref.
 - **CI**: GitHub Actions workflow builds the PDF on Linux on every push and PR; `proofread` and `build` jobs run in parallel. Cachix substitutes pre-built nix derivations so a warm run lands in ~2 min. A separate weekly cron HEADs every URL in the body + bib so link-rot surfaces independently of code changes.
 - **Pre-commit hooks**: typecheck filters, validate citations on push, fix trailing whitespace and line endings.
@@ -54,7 +54,7 @@ make open            # opens the PDF
 make clean           # wipes build/
 ```
 
-The dev shell creates two gitignored symlinks on entry:
+The dev shell creates two gitignored symlinks at the repo root on entry:
 `templates/eisvogel` and `types`, both pointing into the nix store at
 the versions pinned in `flake.lock`. Bump them with `nix flake update`.
 
@@ -107,7 +107,7 @@ nix develop            # tools on PATH; `make` works against ./src
 | Arg            | Default | Effect                                                                |
 |----------------|---------|-----------------------------------------------------------------------|
 | `src`          | (req.)  | Consumer repo root (must contain `src/*.md`)                          |
-| `name`         | report  | Derivation pname                                                      |
+| `name`         | report  | Derivation pname and output file (`result/<name>.pdf`)                |
 | `srcDir`       | src     | Subdir of `src` holding the markdown                                  |
 | `refsDir`      | refs    | Subdir holding `refs.bib` (and optional CSL)                          |
 | `engine`       | xelatex | Pandoc PDF engine                                                     |
@@ -120,6 +120,57 @@ the patched copy from `flake.nix:harvardCsl` automatically.
 
 Bumping the template (eisvogel, filters, Makefile) is then a flake-lock
 update on the consumer side: `nix flake update acedemic`.
+
+#### `nix run` commands with `mkApp`
+
+`mkReport` builds in the Nix sandbox. For day-to-day writing, `mkApp`
+runs the same Makefile against your working copy instead, so `watch`,
+`open` and the diagram cache work, and it runs from anywhere in the
+repo:
+
+```nix
+apps = {
+  paper       = acedemic.lib.${system}.mkApp { name = "paper"; };
+  paper-watch = acedemic.lib.${system}.mkApp { name = "paper"; goals = [ "watch" ]; };
+};
+```
+
+```sh
+nix run .#paper              # builds build/paper.pdf
+nix run .#paper-watch        # rebuilds on every save
+nix run .#paper -- html      # any other Make goal
+```
+
+It takes `name`, `srcDir`, `refsDir`, `engine`, `extraFilters` and
+`template` like `mkReport`, plus `outDir` (default `build`), `goals`
+(Make goals baked in before any passed after `--`) and `fromRepoRoot`
+(default `true`: paths are relative to the git root, not `$PWD`).
+Pass `extraFilters` as strings relative to the root so edits are
+picked up live.
+
+#### Multiple documents
+
+`srcDir`, `refsDir` and `name` let one repo hold several documents
+that share a bibliography:
+
+```nix
+packages = {
+  proposal = mkReport { src = ./.; name = "proposal"; srcDir = "docs/proposal"; refsDir = "docs/refs"; };
+  thesis   = mkReport { src = ./.; name = "thesis";   srcDir = "docs/thesis";   refsDir = "docs/refs"; };
+};
+```
+
+#### Dev-shell symlinks
+
+The dev shell links `templates/eisvogel` and `types` (Lua type stubs
+for LuaLS) at the repo root. To keep them elsewhere, set
+`ACEDEMIC_LINK_DIR` (relative to the root):
+
+```nix
+devShells.default = acedemic.devShells.${system}.default.overrideAttrs {
+  ACEDEMIC_LINK_DIR = "docs/tooling";
+};
+```
 
 #### Adding consumer Lua filters
 
@@ -246,7 +297,7 @@ nix develop --command make proofread
 
 Runs `typecheck`, `check-refs`, `spellcheck`, `check-inverse`,
 `check-diagram-failure`, `check-wordcount-strict`, `check-csv-strict`,
-and `check-anonymous` in cheap-to-expensive order, failing fast. Pass
+`check-anonymous`, `check-section-limits` and `check-book` in cheap-to-expensive order, failing fast. Pass
 means "the build is safe to ship"; it does not prove the prose is
 good. Intentionally does not rebuild the PDF — run `make` separately
 for the render. Network-dependent checks (`make check-links`) are

@@ -63,13 +63,11 @@ draft-text: "DRAFT"
 
 # ---- Anonymous mode (filters/03-anonymous.lua) ----
 # When true, replaces the author with "Anonymous" on the cover and
-# in any header/footer that reads from the author field. Useful for
-# blind-review submissions. Filters run 02 → 03 → 07; with the
-# structured `authors:` list above, 07-authors.lua will overwrite the
-# anonymisation, so the visible cover still shows the real author.
-# Setting `anonymous: true` here keeps 03-anonymous.lua's main branch
-# under test on every CI build.
-anonymous: true
+# in any header/footer that reads from the author field, and stops
+# filters/07-authors.lua emitting the structured `authors:` list
+# above. Useful for blind-review submissions.
+# (tests/fixtures/anonymous* keep the true branch under test in CI.)
+anonymous: false
 
 # ---- Word count (filters/00-wordcount.lua) ----
 # Display the count on the cover and configure what's included.

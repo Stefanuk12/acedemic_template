@@ -3,8 +3,10 @@
 -- Blanks the author for blind review when `anonymous: true` is set.
 -- The cover page shows "Anonymous" instead of the real author, and
 -- the page footer (which Eisvogel populates from the same field)
--- follows suit. Run in conjunction with --metadata-file=blind.yaml
--- if you want even tighter control over which fields leak.
+-- follows suit. filters/07-authors.lua checks the same flag and skips
+-- the structured `authors:` list, so its names and affiliations don't
+-- leak either. Other fields (acknowledgements, title, body) are left
+-- alone; strip identifying text from those yourself.
 --
 -- YAML metadata:
 --   anonymous: true | false   (default: false)

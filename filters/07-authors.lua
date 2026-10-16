@@ -18,6 +18,11 @@
 -- The simple `author:` field continues to work for single-author
 -- documents — this filter only fires when `authors:` is present.
 --
+-- With `anonymous: true` this filter does nothing, leaving the
+-- "Anonymous" author from filters/03-anonymous.lua in place and
+-- emitting no affiliation block (names, emails and ORCIDs would
+-- otherwise de-anonymise a blind-review build).
+--
 -- NOTE: `include-before` is a shared accumulator. filters/06-frontmatter.lua
 -- also appends to it. Order is locked by the numeric filename prefixes
 -- (06 runs before 07); add new producers with that constraint in mind.
@@ -29,6 +34,8 @@ local meta = require("_meta")
 ---@param doc Pandoc
 ---@return Pandoc
 function Pandoc(doc)
+	if meta.is_truthy(doc.meta.anonymous) then return doc end
+
 	local authors = doc.meta.authors
 	if not authors or type(authors) ~= "table" or not authors[1] then
 		return doc

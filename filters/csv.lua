@@ -17,7 +17,10 @@
 -- Attributes:
 --   header     true | false   (default: true) — first row becomes header
 --   file       PATH           — read CSV from disk; ignores fence body
---   delimiter  STRING         — defaults to ","
+--   delimiter  CHAR           — single character; defaults to ","
+--
+-- Rows may have different lengths: the table takes the widest row's
+-- column count and shorter rows are padded with empty cells.
 --
 -- Trust model: the author of the source markdown is the trust
 -- principal. `file=` reads any path readable by the pandoc process
@@ -90,6 +93,9 @@ local function split_csv_line(line, delim)
 		-- the quoted and unquoted branches.
 		if pos <= n and line:sub(pos, pos) == delim then
 			pos = pos + 1
+			-- A delimiter at the very end of the line separates a final
+			-- empty field, which the loop condition would otherwise drop.
+			if pos > n then table.insert(fields, "") end
 		end
 	end
 	return fields
@@ -143,7 +149,15 @@ end
 local function rows_to_table(rows, has_header, caption, identifier)
 	if #rows == 0 then return nil end
 
-	local ncols = #rows[1]
+	-- Size the table to the widest row and pad the rest with empty
+	-- cells: pandoc sizes columns from the header/first row and would
+	-- silently drop cells from any wider row.
+	local ncols = 0
+	for _, r in ipairs(rows) do ncols = math.max(ncols, #r) end
+	for _, r in ipairs(rows) do
+		for _ = #r + 1, ncols do table.insert(r, "") end
+	end
+
 	local aligns, widths = {}, {}
 	for _ = 1, ncols do
 		table.insert(aligns, pandoc.AlignDefault)

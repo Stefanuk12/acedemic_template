@@ -1,0 +1,3 @@
+section-limits:
+  report: true
+  strict: true

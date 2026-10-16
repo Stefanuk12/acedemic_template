@@ -51,23 +51,39 @@ CSL_URL  := https://raw.githubusercontent.com/citation-style-language/styles/mas
 TEMPLATE ?= $(TEMPLATES_DIR)/template-multi-file/eisvogel.latex
 
 # Diagram filters read this from the env (filters/_diagram.lua) so the
-# cache lives next to the rest of the build artefacts.
+# cache lives next to the rest of the build artefacts. ENGINE is read
+# by filters/tikz.lua so TikZ figures compile with the document engine.
 export DIAGRAM_CACHE_DIR := $(OUT_DIR)/diagrams
+export ENGINE
 
-PANDOC_OPTS := \
-  --from=markdown+raw_tex+tex_math_dollars+pipe_tables+grid_tables+fenced_code_attributes \
-  --pdf-engine=$(ENGINE) \
-  --template=$(TEMPLATE) \
+# `book: true` makes Eisvogel use scrbook, but top-level `#` headings
+# only become chapters with pandoc's --top-level-division, which YAML
+# metadata can't set. Detect the flag in the given sources instead.
+top_level_division = $(if $(shell grep -lsE '^book:[[:space:]]*(true|yes|on)[[:space:]]*$$' $(1)),chapter,default)
+TOP_LEVEL_DIVISION ?= $(call top_level_division,$(SRCS))
+
+# ---- Shared pandoc options ----
+# PANDOC_FROM: the Markdown dialect every invocation reads.
+# PANDOC_FILTER_OPTS: Lua filters + crossref + citations, minus the
+#   bibliography (check-* targets point that at their fixture's bib).
+# PANDOC_DOC_OPTS: everything a full document render shares, used by
+#   the PDF build and the html/docx/epub outputs alike.
+PANDOC_FROM := --from=markdown+raw_tex+tex_math_dollars+pipe_tables+grid_tables+fenced_code_attributes
+
+PANDOC_FILTER_OPTS := \
   --filter=pandoc-crossref \
   --citeproc \
-  --bibliography=$(BIB) \
   --csl=$(CSL) \
-  $(addprefix --lua-filter=,$(FILTERS)) \
+  $(addprefix --lua-filter=,$(FILTERS))
+
+PANDOC_DOC_OPTS := \
+  $(PANDOC_FROM) \
+  $(PANDOC_FILTER_OPTS) \
+  --bibliography=$(BIB) \
+  --top-level-division=$(TOP_LEVEL_DIVISION) \
   --number-sections \
   --toc \
   --toc-depth=3 \
-  --lof \
-  --lot \
   --highlight-style=tango \
   -M link-citations=true \
   -M reference-section-title="References" \
@@ -80,7 +96,23 @@ PANDOC_OPTS := \
   -M lstPrefix="Lst." \
   -M secPrefix="§"
 
-.PHONY: all build-dir clean watch open typecheck html docx epub review stats submit arxiv diff check-refs check-links check-inverse check-diagram-failure check-wordcount-strict check-csv-strict check-anonymous spellcheck spellcheck-add proofread ci-local gc-diagrams
+PANDOC_OPTS := \
+  $(PANDOC_DOC_OPTS) \
+  --pdf-engine=$(ENGINE) \
+  --template=$(TEMPLATE) \
+  --lof \
+  --lot
+
+# Fixture renders for the check-* targets: LaTeX through the template
+# and the full filter chain, without crossref (fixtures don't use it).
+# Append --bibliography=<fixture>/refs/refs.bib per target. --citeproc
+# stays ahead of the Lua filters, as in the real build: pandoc runs
+# filters in command-line order, and 08-section-limits counts entries
+# in the generated bibliography.
+CHECK_PANDOC = pandoc $(PANDOC_FROM) --to=latex --template=$(TEMPLATE) \
+  --citeproc --csl=$(CSL) $(addprefix --lua-filter=,$(FILTERS))
+
+.PHONY: all build-dir clean watch open typecheck html docx epub review stats submit arxiv diff check-refs check-links check-inverse check-diagram-failure check-wordcount-strict check-csv-strict check-anonymous check-section-limits check-book spellcheck spellcheck-add proofread ci-local gc-diagrams
 
 all: $(OUT)
 
@@ -136,49 +168,37 @@ typecheck: $(FILTERS) $(TYPES_DIR)/pandoc.lua
 	@lua-language-server --check=. --logpath=$(OUT_DIR)/luals-log --checklevel=Warning
 	@echo "✓ all filters type-check clean"
 
+# Rebuild on every save. The file list is re-globbed each time round
+# the loop: entr -d exits with status 2 when a file is added to a
+# watched directory, so new sections are picked up without a restart.
+# The sub-make names this Makefile explicitly — consumers invoke it
+# with `-f`, and a bare $(MAKE) would pick up their own Makefile.
 watch:
 	@command -v entr >/dev/null || { echo "entr not found (in dev shell?)"; exit 1; }
-	@echo "watching $(SRCS) $(FILTERS) $(BIB) — Ctrl-C to stop"
-	@echo $(SRCS) $(FILTERS) $(BIB) | tr ' ' '\n' | entr -c $(MAKE) all
+	@echo "watching $(SRC_DIR)/*.md, filters and $(BIB) — Ctrl-C to stop"
+	@while :; do \
+	  printf '%s\n' $(SRC_DIR)/*.md $(FILTERS) $(BIB) \
+	    | entr -d -c $(MAKE) --no-print-directory -f $(firstword $(MAKEFILE_LIST)) all; \
+	  [ $$? -eq 2 ] || break; \
+	done
 
 open: $(OUT)
 	@xdg-open $(OUT) >/dev/null 2>&1 &
 
 # ---- Multi-format outputs ----
-# Build options shared with the PDF target, minus the LaTeX-specific
-# things (template, pdf-engine). Each format keeps citation processing,
-# crossrefs, and all Lua filters.
-PANDOC_COMMON := \
-  --from=markdown+raw_tex+tex_math_dollars+pipe_tables+grid_tables+fenced_code_attributes \
-  --filter=pandoc-crossref \
-  --citeproc \
-  --bibliography=$(BIB) \
-  --csl=$(CSL) \
-  $(addprefix --lua-filter=,$(FILTERS)) \
-  --number-sections \
-  --toc \
-  --toc-depth=3 \
-  --highlight-style=tango \
-  -M link-citations=true \
-  -M reference-section-title="References" \
-  -M figureTitle="Figure" \
-  -M tableTitle="Table" \
-  -M figPrefix="Fig." \
-  -M tblPrefix="Tbl." \
-  -M eqnPrefix="Eq." \
-  -M lstPrefix="Lst." \
-  -M secPrefix="§"
-
+# Same options as the PDF build minus the LaTeX-specific ones
+# (template, pdf-engine, lists of figures/tables). Each format keeps
+# citation processing, crossrefs, and all Lua filters.
 $(OUT_DIR)/report.html: $(SRCS) $(FILTERS) $(BIB) $(CSL) | build-dir
-	pandoc $(PANDOC_COMMON) --standalone --embed-resources --mathjax -o $@ $(SRCS)
+	pandoc $(PANDOC_DOC_OPTS) --standalone --embed-resources --mathjax -o $@ $(SRCS)
 	@echo "✓ wrote $@"
 
 $(OUT_DIR)/report.docx: $(SRCS) $(FILTERS) $(BIB) $(CSL) | build-dir
-	pandoc $(PANDOC_COMMON) -o $@ $(SRCS)
+	pandoc $(PANDOC_DOC_OPTS) -o $@ $(SRCS)
 	@echo "✓ wrote $@"
 
 $(OUT_DIR)/report.epub: $(SRCS) $(FILTERS) $(BIB) $(CSL) | build-dir
-	pandoc $(PANDOC_COMMON) -o $@ $(SRCS)
+	pandoc $(PANDOC_DOC_OPTS) -o $@ $(SRCS)
 	@echo "✓ wrote $@"
 
 html: $(OUT_DIR)/report.html
@@ -249,17 +269,9 @@ arxiv: $(OUT)
 	@if [ -d "$(OUT_DIR)/diagrams" ]; then \
 	  find "$(OUT_DIR)/diagrams" -maxdepth 1 -name '*.pdf' -exec cp {} $(OUT_DIR)/arxiv/diagrams/ \; ; \
 	fi
-	@pandoc \
-	  --from=markdown+raw_tex+tex_math_dollars+pipe_tables+grid_tables+fenced_code_attributes \
+	@pandoc $(PANDOC_DOC_OPTS) \
 	  --to=latex \
 	  --standalone \
-	  --pdf-engine=$(ENGINE) \
-	  --filter=pandoc-crossref \
-	  --citeproc --bibliography=$(BIB) --csl=$(CSL) \
-	  $(addprefix --lua-filter=,$(FILTERS)) \
-	  --number-sections \
-	  -M link-citations=true \
-	  -M reference-section-title="References" \
 	  -o $(OUT_DIR)/arxiv/report.tex $(SRCS)
 	@printf 'Rebuild:\n\n    %s -interaction=nonstopmode report.tex\n    %s -interaction=nonstopmode report.tex    # second pass for refs\n\nDiagrams are pre-rendered; do not edit `diagrams/*.pdf`.\nThe canonical source is the project repo from which this bundle was generated.\n' \
 	  $(ENGINE) $(ENGINE) > $(OUT_DIR)/arxiv/REBUILD.md
@@ -405,7 +417,8 @@ endef
 # Builds tests/fixtures/inverse to LaTeX and asserts the expected
 # filter-output shape — verifies that hide-mode todos, glossary append,
 # unknown cover-style fallback, the wordcount warn branch, csv io.open
-# failure, csv empty-rows failure, and csv header=false all run.
+# failure, csv empty-rows failure, csv header=false and csv ragged-row
+# padding all run.
 #
 # Several assertions are count-based (count_eq <file> <pattern> <n>),
 # not just substring-presence — so a regression that still happens to
@@ -420,12 +433,8 @@ check-inverse:
 	@inv=tests/fixtures/inverse; \
 	  out=$$(mktemp --suffix=.tex); \
 	  err=$$(mktemp); \
-	  pandoc \
-	    --from=markdown+raw_tex+tex_math_dollars+pipe_tables+grid_tables+fenced_code_attributes \
-	    --to=latex \
-	    --template=$(TEMPLATE) \
-	    --citeproc --bibliography=$$inv/refs/refs.bib --csl=$(CSL) \
-	    $(addprefix --lua-filter=,$(FILTERS)) \
+	  $(CHECK_PANDOC) \
+	    --bibliography=$$inv/refs/refs.bib \
 	    -M reference-section-title="References" \
 	    -o $$out $$inv/src/*.md 2>$$err; rc=$$?; \
 	  fail=0; assert() { if grep -qF "$$2" $$1; then echo "  ✓ $$3"; else echo "  ✗ $$3 (missing '$$2')"; fail=1; fi; }; \
@@ -440,6 +449,7 @@ check-inverse:
 	  refute    $$out "hidden marker"       "todos.hide deleted the [text]{.todo} span"; \
 	  count_eq  $$out "CSV FAILED"        2 "two csv failure_placeholder blocks rendered (io.open + empty)"; \
 	  count_eq  $$out "bodycellhf"        1 "csv header=false branch emitted first-row data into the table body"; \
+	  count_eq  $$out "widethreetoken"    1 "csv padded ragged rows instead of dropping cells beyond the first row's width"; \
 	  count_eq  $$err "[cover-style]"     1 "unknown cover-style preset warned exactly once on stderr"; \
 	  count_eq  $$err "[wordcount] WARNING" 1 "wordcount over-limit warned exactly once on stderr"; \
 	  count_eq  $$err "[csv] cannot open" 1 "csv io.open failure logged exactly once on stderr"; \
@@ -477,11 +487,8 @@ check-diagram-failure:
 	  fail=0; \
 	  $(CHECK_HELPERS) \
 	  echo "Broken-diagram fixture assertions (default policy):"; \
-	  DIAGRAM_CACHE_DIR=$$isolated_cache pandoc \
-	    --from=markdown+raw_tex+tex_math_dollars+pipe_tables+grid_tables+fenced_code_attributes \
-	    --to=latex --template=$(TEMPLATE) \
-	    --citeproc --bibliography=$$bd/refs/refs.bib --csl=$(CSL) \
-	    $(addprefix --lua-filter=,$(FILTERS)) \
+	  DIAGRAM_CACHE_DIR=$$isolated_cache $(CHECK_PANDOC) \
+	    --bibliography=$$bd/refs/refs.bib \
 	    -o $$out $$bd/src/*.md 2>$$err; rc=$$?; \
 	  if [ $$rc -ne 0 ]; then \
 	    echo "  ✗ default-policy build crashed (rc=$$rc); placeholder path is unreachable"; \
@@ -496,11 +503,8 @@ check-diagram-failure:
 	  for spec in "mermaid:10-broken.md" "d2:20-broken-d2.md" "plantuml:30-broken-plantuml.md" "graphviz:40-broken-graphviz.md"; do \
 	    tag=$${spec%%:*}; file=$${spec##*:}; \
 	    : > $$err; \
-	    DIAGRAM_CACHE_DIR=$$isolated_cache DIAGRAM_FAIL_HARD=1 pandoc \
-	      --from=markdown+raw_tex+tex_math_dollars+pipe_tables+grid_tables+fenced_code_attributes \
-	      --to=latex --template=$(TEMPLATE) \
-	      --citeproc --bibliography=$$bd/refs/refs.bib --csl=$(CSL) \
-	      $(addprefix --lua-filter=,$(FILTERS)) \
+	    DIAGRAM_CACHE_DIR=$$isolated_cache DIAGRAM_FAIL_HARD=1 $(CHECK_PANDOC) \
+	      --bibliography=$$bd/refs/refs.bib \
 	      -o /dev/null $$bd/src/00-metadata.md $$bd/src/$$file 2>$$err; rc=$$?; \
 	    if [ $$rc -eq 0 ]; then \
 	      echo "  ✗ [$$tag] DIAGRAM_FAIL_HARD: pandoc exited 0; expected non-zero"; fail=1; \
@@ -526,11 +530,8 @@ check-wordcount-strict:
 	  err=$$(mktemp); fail=0; \
 	  $(CHECK_HELPERS) \
 	  echo "Wordcount strict-mode fixture assertions:"; \
-	  pandoc \
-	    --from=markdown+raw_tex+tex_math_dollars+pipe_tables+grid_tables+fenced_code_attributes \
-	    --to=latex --template=$(TEMPLATE) \
-	    --citeproc --bibliography=$$wc/refs/refs.bib --csl=$(CSL) \
-	    $(addprefix --lua-filter=,$(FILTERS)) \
+	  $(CHECK_PANDOC) \
+	    --bibliography=$$wc/refs/refs.bib \
 	    -o /dev/null $$wc/src/*.md 2>$$err; rc=$$?; \
 	  if [ $$rc -eq 0 ]; then \
 	    echo "  ✗ pandoc exited 0; expected non-zero (strict-limit not enforced)"; \
@@ -554,11 +555,8 @@ check-csv-strict:
 	  err=$$(mktemp); fail=0; \
 	  $(CHECK_HELPERS) \
 	  echo "CSV strict-mode fixture assertions:"; \
-	  CSV_FAIL_HARD=1 pandoc \
-	    --from=markdown+raw_tex+tex_math_dollars+pipe_tables+grid_tables+fenced_code_attributes \
-	    --to=latex --template=$(TEMPLATE) \
-	    --citeproc --bibliography=$$csv/refs/refs.bib --csl=$(CSL) \
-	    $(addprefix --lua-filter=,$(FILTERS)) \
+	  CSV_FAIL_HARD=1 $(CHECK_PANDOC) \
+	    --bibliography=$$csv/refs/refs.bib \
 	    -o /dev/null $$csv/src/*.md 2>$$err; rc=$$?; \
 	  if [ $$rc -eq 0 ]; then \
 	    echo "  ✗ pandoc exited 0; expected non-zero (CSV_FAIL_HARD not enforced)"; \
@@ -581,16 +579,17 @@ check-csv-strict:
 # AND absence of the real name "Jane Realname" (count == 0). The combined
 # pair is a value comparison: 03 ran AND its rewrite stuck through the
 # remainder of the filter chain.
+#
+# tests/fixtures/anonymous-authors then repeats the check with a
+# structured `authors:` list, asserting 07-authors.lua honours the flag
+# and leaks neither the name nor the affiliation/email block.
 check-anonymous:
 	@an=tests/fixtures/anonymous; \
 	  out=$$(mktemp --suffix=.tex); err=$$(mktemp); fail=0; \
 	  $(CHECK_HELPERS) \
 	  echo "Anonymous-mode fixture assertions:"; \
-	  pandoc \
-	    --from=markdown+raw_tex+tex_math_dollars+pipe_tables+grid_tables+fenced_code_attributes \
-	    --to=latex --template=$(TEMPLATE) \
-	    --citeproc --bibliography=$$an/refs/refs.bib --csl=$(CSL) \
-	    $(addprefix --lua-filter=,$(FILTERS)) \
+	  $(CHECK_PANDOC) \
+	    --bibliography=$$an/refs/refs.bib \
 	    -o $$out $$an/src/*.md 2>$$err; rc=$$?; \
 	  if [ $$rc -ne 0 ]; then \
 	    echo "  ✗ pandoc failed to build the anonymous fixture (rc=$$rc)"; \
@@ -598,9 +597,83 @@ check-anonymous:
 	  fi; \
 	  count_ge $$out "Anonymous"      1 "03-anonymous.lua wrote 'Anonymous' into the rendered output"; \
 	  count_eq $$out "Jane Realname"  0 "real author name was rewritten and never reaches LaTeX"; \
+	  an=tests/fixtures/anonymous-authors; \
+	  $(CHECK_PANDOC) \
+	    --bibliography=$$an/refs/refs.bib \
+	    -o $$out $$an/src/*.md 2>$$err; rc=$$?; \
+	  if [ $$rc -ne 0 ]; then \
+	    echo "  ✗ pandoc failed to build the anonymous-authors fixture (rc=$$rc)"; \
+	    cat $$err; rm -f $$out $$err; exit 1; \
+	  fi; \
+	  count_ge $$out "Anonymous"             1 "structured authors: cover still shows 'Anonymous'"; \
+	  count_eq $$out "Jane Realname"         0 "structured authors: 07-authors.lua did not restore the name"; \
+	  count_eq $$out "Realname Institute"    0 "structured authors: no affiliation block emitted"; \
+	  count_eq $$out "jane@realname.example" 0 "structured authors: no email emitted"; \
 	  rm -f $$out $$err; \
 	  if [ $$fail -ne 0 ]; then exit 1; fi; \
-	  echo "✓ anonymous-mode path exercised"
+	  echo "✓ anonymous-mode path exercised (simple + structured authors)"
+
+# ---- Section-limits fixture check ----
+# Renders tests/fixtures/section-limits and asserts the exact counts
+# filters/08-section-limits.lua reports: block quotes and citations are
+# not counted, subsections count towards their parent, list items and
+# bibliography entries count as items, and unlimited headings are
+# ignored. Then reruns with strict: true and expects a clean failure.
+#
+# The fixture keeps section-limits out of its own YAML because document
+# metadata overrides --metadata-file; report.yaml / strict.yaml set it.
+check-section-limits:
+	@sl=tests/fixtures/section-limits; \
+	  err=$$(mktemp); fail=0; \
+	  $(CHECK_HELPERS) \
+	  echo "Section-limits fixture assertions:"; \
+	  $(CHECK_PANDOC) \
+	    --bibliography=$$sl/refs/refs.bib --metadata-file=$$sl/report.yaml \
+	    -o /dev/null $$sl/src/*.md 2>$$err; rc=$$?; \
+	  if [ $$rc -ne 0 ]; then \
+	    echo "  ✗ report-mode build failed (rc=$$rc)"; cat $$err; rm -f $$err; exit 1; \
+	  fi; \
+	  count_eq $$err "Aim: 4 / 3 words (over by 1)" 1 "words: quote + citation skipped, subsection counted"; \
+	  count_eq $$err "Objectives: 3 / 2 objectives (over by 1), 3 / 50 words" 1 "named item unit counts list items"; \
+	  count_eq $$err "Sources: 2 / 1 items (over by 1)" 1 "bare max counts bibliography entries"; \
+	  count_eq $$err "Unlimited" 0 "headings without a limit are ignored"; \
+	  count_eq $$err "3 limit(s) exceeded" 1 "non-strict mode warns instead of failing"; \
+	  : > $$err; \
+	  $(CHECK_PANDOC) \
+	    --bibliography=$$sl/refs/refs.bib --metadata-file=$$sl/strict.yaml \
+	    -o /dev/null $$sl/src/*.md 2>$$err; rc=$$?; \
+	  if [ $$rc -eq 0 ]; then \
+	    echo "  ✗ strict mode: pandoc exited 0; expected non-zero"; fail=1; \
+	  else \
+	    count_eq $$err "strict mode enabled" 1 "strict mode fails the build with a clean message"; \
+	  fi; \
+	  rm -f $$err; \
+	  if [ $$fail -ne 0 ]; then exit 1; fi; \
+	  echo "✓ section-limits counts and strict path exercised"
+
+# ---- Book-mode fixture check ----
+# `book: true` in tests/fixtures/book must switch top-level headings to
+# \chapter (via top_level_division above), not leave them as \section
+# numbered 0.1, 0.2, … under scrbook.
+BOOK_FIXTURE_SRCS = $(sort $(wildcard tests/fixtures/book/src/*.md))
+check-book:
+	@bk=tests/fixtures/book; \
+	  out=$$(mktemp --suffix=.tex); err=$$(mktemp); fail=0; \
+	  $(CHECK_PANDOC) \
+	    --bibliography=$$bk/refs/refs.bib \
+	    --top-level-division=$(call top_level_division,$(BOOK_FIXTURE_SRCS)) \
+	    -o $$out $(BOOK_FIXTURE_SRCS) 2>$$err; rc=$$?; \
+	  $(CHECK_HELPERS) \
+	  if [ $$rc -ne 0 ]; then \
+	    echo "  ✗ pandoc failed to build the book fixture (rc=$$rc)"; \
+	    cat $$err; rm -f $$out $$err; exit 1; \
+	  fi; \
+	  echo "Book-mode fixture assertions:"; \
+	  count_eq $$out "\chapter{First chapter}"  1 "book: true renders top-level headings as chapters"; \
+	  count_eq $$out "\section{A section}"      1 "second-level headings become sections"; \
+	  rm -f $$out $$err; \
+	  if [ $$fail -ne 0 ]; then exit 1; fi; \
+	  echo "✓ book-mode chapter detection exercised"
 
 # ---- URL link checker ----
 # HEADs every http(s) URL appearing in the body markdown OR in refs.bib
@@ -777,6 +850,8 @@ proofread:
 	@$(MAKE) --no-print-directory check-wordcount-strict
 	@$(MAKE) --no-print-directory check-csv-strict
 	@$(MAKE) --no-print-directory check-anonymous
+	@$(MAKE) --no-print-directory check-section-limits
+	@$(MAKE) --no-print-directory check-book
 	@echo "✓ proofreading gate clean — safe to proceed with prose review"
 	@echo "  (network-dependent: run \`make check-links\` separately before submission)"
 

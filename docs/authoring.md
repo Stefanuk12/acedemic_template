@@ -119,7 +119,7 @@ nix develop --command make proofread
 
 Runs `typecheck`, `check-refs`, `spellcheck`, `check-inverse`,
 `check-diagram-failure`, `check-wordcount-strict`, `check-csv-strict`,
-and `check-anonymous` in order, failing fast on the first non-zero
+`check-anonymous`, `check-section-limits` and `check-book` in order, failing fast on the first non-zero
 exit. Cheap-to-expensive order means a broken Lua filter or a missing
 bib entry surfaces before the heavier fixture builds. Pass means "the
 build is safe to ship"; it does NOT prove the prose is good.
@@ -141,7 +141,9 @@ submission.
 | `make check-diagram-failure` | every diagram backend's default + strict-mode failure path                      |
 | `make check-wordcount-strict` | strict-mode overflow kills the build with a clean stderr message               |
 | `make check-csv-strict`   | `CSV_FAIL_HARD=1` escalates csv failure to a hard error                            |
-| `make check-anonymous`    | filters/03-anonymous.lua rewrites the author in isolation from 07-authors          |
+| `make check-anonymous`    | anonymous mode hides the author, with and without a structured `authors:` list     |
+| `make check-section-limits` | per-section word/item counts and the strict failure path                         |
+| `make check-book`         | `book: true` renders top-level headings as chapters                                |
 
 ### Extending the spell-check dictionary
 

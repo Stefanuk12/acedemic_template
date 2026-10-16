@@ -31,14 +31,6 @@ local script_dir = debug.getinfo(1, "S").source:sub(2):match("(.*/)") or "./"
 package.path = script_dir .. "?.lua;" .. package.path
 local meta = require("_meta")
 
----@param text string
----@return integer
-local function count_words(text)
-	local n = 0
-	for _ in text:gmatch("%S+") do n = n + 1 end
-	return n
-end
-
 ---@param n integer
 ---@return string
 local function with_commas(n)
@@ -135,7 +127,7 @@ local function count_body(blocks, opts)
 					Cite = function(_) return {} end,
 				})
 			end
-			count = count + count_words(meta.as_string(processed))
+			count = count + meta.count_words(processed)
 		end
 	end
 
@@ -149,7 +141,7 @@ local function count_cover(doc_meta)
 	for _, key in ipairs({ "title", "subtitle", "author", "abstract" }) do
 		local v = doc_meta[key]
 		if v then
-			count = count + count_words(meta.as_string(v))
+			count = count + meta.count_words(v)
 		end
 	end
 	return count

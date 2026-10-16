@@ -72,9 +72,6 @@ function Pandoc(doc)
 		end,
 	})
 
-	-- highlight mode pulls in xcolor (already on Eisvogel's preamble
-	-- but harmless if loaded twice). Add nothing here.
-
 	doc.blocks = processed.content
 	doc.meta["todo-count"] = pandoc.MetaInlines({ pandoc.Str(tostring(count)) })
 

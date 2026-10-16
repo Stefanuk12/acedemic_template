@@ -60,12 +60,6 @@ CodeBlock = D.make_filter({
 			return nil
 		end
 
-		local cmd_rsvg = string.format("rsvg-convert -f pdf -o %s %s", D.shell_quote(ctx.pdf_path), D.shell_quote(svg))
-		if not D.run(cmd_rsvg) or not D.file_exists(ctx.pdf_path) then
-			io.stderr:write("[plantuml] rsvg-convert failed for diagram " .. ctx.hash .. "\n")
-			return nil
-		end
-
-		return ctx.pdf_path
+		return D.svg_to_pdf(ctx, svg)
 	end,
 })
