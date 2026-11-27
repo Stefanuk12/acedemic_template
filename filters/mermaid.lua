@@ -25,9 +25,21 @@ CodeBlock = D.make_filter({
 	render = function(ctx)
 		local svg = ctx.cache_dir .. "/" .. ctx.hash .. ".svg"
 
+		-- Chromium aborts when it can't set up its own sandbox, which is
+		-- the case on CI runners that restrict unprivileged user
+		-- namespaces (e.g. GitHub's Ubuntu images) and in some containers.
+		-- It only renders the document's own diagram source here, inside
+		-- the build, so run it without that sandbox.
+		local puppeteer_cfg = ctx.cache_dir .. "/puppeteer-config.json"
+		if not D.file_exists(puppeteer_cfg) then
+			local f = assert(io.open(puppeteer_cfg, "w"))
+			f:write('{ "args": ["--no-sandbox"] }\n')
+			f:close()
+		end
+
 		local cmd_mmdc = string.format(
-			"mmdc -i %s -o %s -b transparent --quiet",
-			D.shell_quote(ctx.src_path), D.shell_quote(svg))
+			"mmdc -i %s -o %s -b transparent --quiet -p %s",
+			D.shell_quote(ctx.src_path), D.shell_quote(svg), D.shell_quote(puppeteer_cfg))
 		if not D.run(cmd_mmdc) or not D.file_exists(svg) then
 			io.stderr:write("[mermaid] mmdc failed for diagram " .. ctx.hash .. "\n")
 			return nil
