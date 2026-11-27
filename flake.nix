@@ -30,13 +30,29 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
-        # TeX Live profile: medium scheme covers what pandoc's default
-        # LaTeX template needs (fonts, hyperref, longtable, booktabs,
-        # caption, subcaption, microtype, fancyvrb, ...). Add small
-        # extras pandoc commonly pulls in plus everything Eisvogel
-        # (templates/eisvogel.latex) requires beyond texliveMedium.
-        texEnv = pkgs.texliveMedium.withPackages (
-          ps: with ps; [
+        # TeX Live profile: the medium scheme's collections cover what
+        # pandoc's default LaTeX template needs (fonts, hyperref,
+        # longtable, booktabs, caption, subcaption, microtype, fancyvrb,
+        # ...), minus the two packages that pull in a ~600 MB JDK:
+        # latex2nemeth (Braille maths) and albatross (glyph search). That
+        # drops collection-binextra, 100+ command-line utilities of which
+        # only latexdiff (added below) is used, and keeps the rest of
+        # collection-fontutils. Add small extras pandoc commonly pulls in
+        # plus everything Eisvogel (templates/eisvogel.latex) requires
+        # beyond the medium scheme.
+        mediumCollections =
+          ps:
+          pkgs.lib.concatMap (
+            c:
+            if c.pname == "collection-binextra" then
+              [ ]
+            else if c.pname == "collection-fontutils" then
+              builtins.filter (p: p.pname != "albatross") c.tlDeps
+            else
+              [ c ]
+          ) ps.scheme-medium.tlDeps;
+        texEnv = pkgs.texliveBasic.withPackages (
+          ps: mediumCollections ps ++ (with ps; [
             # pandoc defaults
             xurl
             footnotebackref
@@ -77,7 +93,7 @@
             latexdiff
             # make review (line-numbered build for supervisor feedback)
             lineno
-          ]
+          ])
         );
 
         # Runtime deps shared by `nix build` and `nix develop`. Anything
