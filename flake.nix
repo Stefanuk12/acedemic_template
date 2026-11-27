@@ -98,6 +98,41 @@
 
         # Runtime deps shared by `nix build` and `nix develop`. Anything
         # the Makefile shells out to during a build belongs here.
+        # pandoc-crossref. nixpkgs' haskellPackages build links against
+        # GHC at runtime (~2.7 GiB in the closure), so on x86_64-linux use
+        # the project's official static release instead (~63 MB). Pin the
+        # release built with the same pandoc version as nixpkgs' pandoc
+        # (check `pandoc-crossref --version`); other systems fall back to
+        # the nixpkgs build.
+        pandocCrossref =
+          if system == "x86_64-linux" then
+            pkgs.stdenvNoCC.mkDerivation {
+              pname = "pandoc-crossref";
+              version = "0.3.20";
+              src = pkgs.fetchurl {
+                url = "https://github.com/lierdakil/pandoc-crossref/releases/download/v0.3.20/pandoc-crossref-Linux-X64.tar.xz";
+                hash = "sha256-CA9ORV0NNuNHc8ZBYQaDWlW9dvgQwqVlJyjL9X6RG88=";
+              };
+              sourceRoot = ".";
+              dontConfigure = true;
+              dontBuild = true;
+              installPhase = ''
+                runHook preInstall
+                install -Dm755 pandoc-crossref $out/bin/pandoc-crossref
+                install -Dm644 pandoc-crossref.1 $out/share/man/man1/pandoc-crossref.1
+                runHook postInstall
+              '';
+              meta = {
+                description = "Pandoc filter for numbering figures, equations, tables and cross-references (official static build)";
+                homepage = "https://github.com/lierdakil/pandoc-crossref";
+                license = pkgs.lib.licenses.gpl2Only;
+                platforms = [ "x86_64-linux" ];
+                sourceProvenance = [ pkgs.lib.sourceTypes.binaryNativeCode ];
+              };
+            }
+          else
+            pkgs.haskellPackages.pandoc-crossref;
+
         # Diagram backends, each opt-in per document via the `diagrams`
         # argument of mkReport / mkApp. They dominate the closure size
         # (d2 bundles Playwright browsers, ~2.9 GiB; plantuml a JDK,
@@ -128,7 +163,7 @@
 
         baseDeps = with pkgs; [
           pandoc
-          haskellPackages.pandoc-crossref
+          pandocCrossref
           texEnv
           librsvg       # `rsvg-convert` (SVG -> PDF)
           gnumake
