@@ -82,14 +82,38 @@
 
         # Runtime deps shared by `nix build` and `nix develop`. Anything
         # the Makefile shells out to during a build belongs here.
-        buildDeps = with pkgs; [
+        # Diagram backends, each opt-in per document via the `diagrams`
+        # argument of mkReport / mkApp. They dominate the closure size
+        # (d2 bundles Playwright browsers, ~2.9 GiB; plantuml a JDK,
+        # ~0.9 GiB), so documents that only use some of them can skip the
+        # rest. A filter whose tool is missing leaves its block unrendered.
+        diagramDeps = with pkgs; {
+          mermaid = [ mermaid-cli ]; # `mmdc` (configured for NixOS chromium)
+          plantuml = [ plantuml ];   # full UML 2.x (class, sequence, activity, …)
+          graphviz = [ graphviz ];   # `dot`; filters/graphviz.lua
+          d2 = [ d2 ];               # filters/d2.lua — declarative diagrams
+        };
+        allDiagrams = builtins.attrNames diagramDeps;
+
+        # Runtime deps for a document using the given diagram backends.
+        buildDepsFor =
+          diagrams:
+          baseDeps
+          ++ pkgs.lib.concatMap (
+            d:
+            diagramDeps.${d}
+              or (throw "acedemic: unknown diagram backend \"${d}\" (expected one of: ${pkgs.lib.concatStringsSep ", " allDiagrams})")
+          ) diagrams;
+
+        # Runtime deps shared by `nix build` and `nix develop`, with every
+        # diagram backend. Anything the Makefile shells out to during a
+        # build belongs in baseDeps or diagramDeps.
+        buildDeps = buildDepsFor allDiagrams;
+
+        baseDeps = with pkgs; [
           pandoc
           haskellPackages.pandoc-crossref
           texEnv
-          mermaid-cli   # `mmdc` (configured for NixOS chromium)
-          plantuml      # full UML 2.x (class, sequence, activity, …)
-          graphviz      # `dot`; also used directly by filters/graphviz.lua
-          d2            # filters/d2.lua — declarative diagrams
           librsvg       # `rsvg-convert` (SVG -> PDF)
           gnumake
           curl          # make refs/harvard.csl fetches the CSL; make check-links HEADs URLs
@@ -137,13 +161,16 @@
             # Override the LaTeX template entirely. Must point at a
             # .latex file; pandoc resolves partials relative to it.
             template ? null,
+            # Diagram backends to include: any of "mermaid", "plantuml",
+            # "graphviz", "d2". Defaults to all of them.
+            diagrams ? allDiagrams,
           }:
           pkgs.stdenv.mkDerivation {
             pname = name;
             version = "0.0.0";
             src = pkgs.lib.cleanSource src;
 
-            nativeBuildInputs = buildDeps;
+            nativeBuildInputs = buildDepsFor diagrams;
 
             # Sandbox needs a writable HOME for fontconfig + chromium.
             buildPhase = ''
@@ -221,13 +248,15 @@
             template ? null,
             goals ? [ ],
             fromRepoRoot ? true,
+            # Same as mkReport's `diagrams`.
+            diagrams ? allDiagrams,
           }:
           {
             type = "app";
             program = toString (
               pkgs.writeShellScript "acedemic-${name}" ''
                 set -eu
-                export PATH=${pkgs.lib.makeBinPath (buildDeps ++ interactiveDeps)}:$PATH
+                export PATH=${pkgs.lib.makeBinPath (buildDepsFor diagrams ++ interactiveDeps)}:$PATH
                 export FONTCONFIG_PATH=${pkgs.fontconfig.out}/etc/fonts
                 ${pkgs.lib.optionalString fromRepoRoot ''
                   cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"

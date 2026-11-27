@@ -114,6 +114,7 @@ nix develop            # tools on PATH; `make` works against ./src
 | `extraGoals`   | []      | Extra Make goals (e.g. `[ "html" ]`)                                  |
 | `extraFilters` | []      | Consumer Lua filters layered on top of the bundled set (see below)    |
 | `template`     | null    | Override the LaTeX template entirely; path to a `.latex` file         |
+| `diagrams`     | all     | Diagram backends to include: any of `mermaid`, `plantuml`, `graphviz`, `d2`. Dropping unused ones shrinks the build (d2 alone is ~2.9 GiB) |
 
 If the consumer doesn't ship `refs/harvard.csl`, `mkReport` drops in
 the patched copy from `flake.nix:harvardCsl` automatically.
@@ -141,8 +142,8 @@ nix run .#paper-watch        # rebuilds on every save
 nix run .#paper -- html      # any other Make goal
 ```
 
-It takes `name`, `srcDir`, `refsDir`, `engine`, `extraFilters` and
-`template` like `mkReport`, plus `outDir` (default `build`), `goals`
+It takes `name`, `srcDir`, `refsDir`, `engine`, `extraFilters`,
+`template` and `diagrams` like `mkReport`, plus `outDir` (default `build`), `goals`
 (Make goals baked in before any passed after `--`) and `fromRepoRoot`
 (default `true`: paths are relative to the git root, not `$PWD`).
 Pass `extraFilters` as strings relative to the root so edits are
